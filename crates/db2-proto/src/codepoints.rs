@@ -4,115 +4,115 @@
 // ============================================================
 // Connection / Handshake Commands
 // ============================================================
-pub const EXCSAT: u16 = 0x1041;    // Exchange Server Attributes
-pub const EXSATRD: u16 = 0x1443;   // Exchange Server Attributes Reply Data
-pub const ACCSEC: u16 = 0x106D;    // Access Security
-pub const ACCSECRD: u16 = 0x14AC;  // Access Security Reply Data
-pub const SECCHK: u16 = 0x106E;    // Security Check
-pub const SECCHKRM: u16 = 0x1219;  // Security Check Reply Message
-pub const ACCRDB: u16 = 0x2001;    // Access RDB
-pub const ACCRDBRM: u16 = 0x2201;  // Access RDB Reply Message
+pub const EXCSAT: u16 = 0x1041; // Exchange Server Attributes
+pub const EXSATRD: u16 = 0x1443; // Exchange Server Attributes Reply Data
+pub const ACCSEC: u16 = 0x106D; // Access Security
+pub const ACCSECRD: u16 = 0x14AC; // Access Security Reply Data
+pub const SECCHK: u16 = 0x106E; // Security Check
+pub const SECCHKRM: u16 = 0x1219; // Security Check Reply Message
+pub const ACCRDB: u16 = 0x2001; // Access RDB
+pub const ACCRDBRM: u16 = 0x2201; // Access RDB Reply Message
 
 // ============================================================
 // Parameters
 // ============================================================
-pub const EXTNAM: u16 = 0x115E;    // External Name
-pub const SRVNAM: u16 = 0x116D;    // Server Name
-pub const SRVRLSLV: u16 = 0x115A;  // Server Product Release Level
-pub const SRVCLSNM: u16 = 0x1147;  // Server Class Name
-pub const MGRLVLLS: u16 = 0x1404;  // Manager Level List
-pub const SECMEC: u16 = 0x11A2;    // Security Mechanism
-pub const SECTKN: u16 = 0x11DC;    // Security Token
-pub const USRID: u16 = 0x11A0;     // User ID
-pub const PASSWORD: u16 = 0x11A1;  // Password
-pub const RDBNAM: u16 = 0x2110;    // Relational Database Name
-pub const PRDID: u16 = 0x112E;     // Product Specific Identifier
+pub const EXTNAM: u16 = 0x115E; // External Name
+pub const SRVNAM: u16 = 0x116D; // Server Name
+pub const SRVRLSLV: u16 = 0x115A; // Server Product Release Level
+pub const SRVCLSNM: u16 = 0x1147; // Server Class Name
+pub const MGRLVLLS: u16 = 0x1404; // Manager Level List
+pub const SECMEC: u16 = 0x11A2; // Security Mechanism
+pub const SECTKN: u16 = 0x11DC; // Security Token
+pub const USRID: u16 = 0x11A0; // User ID
+pub const PASSWORD: u16 = 0x11A1; // Password
+pub const RDBNAM: u16 = 0x2110; // Relational Database Name
+pub const PRDID: u16 = 0x112E; // Product Specific Identifier
 pub const TYPDEFNAM: u16 = 0x002F; // Data Type Definition Name
 pub const TYPDEFOVR: u16 = 0x0035; // TYPDEF Overrides
-pub const CCSIDSBC: u16 = 0x119C;  // CCSID for Single-Byte Characters
-pub const CCSIDDBC: u16 = 0x119D;  // CCSID for Double-Byte Characters
-pub const CCSIDMBC: u16 = 0x119E;  // CCSID for Mixed-Byte Characters
-pub const RDBACCCL: u16 = 0x210F;  // RDB Access Manager Class
+pub const CCSIDSBC: u16 = 0x119C; // CCSID for Single-Byte Characters
+pub const CCSIDDBC: u16 = 0x119D; // CCSID for Double-Byte Characters
+pub const CCSIDMBC: u16 = 0x119E; // CCSID for Mixed-Byte Characters
+pub const RDBACCCL: u16 = 0x210F; // RDB Access Manager Class
 
 // ============================================================
 // SQL Operation Commands
 // ============================================================
-pub const CLSQRY: u16 = 0x2005;    // Close Query
+pub const CLSQRY: u16 = 0x2005; // Close Query
 pub const EXCSQLIMM: u16 = 0x200A; // Execute Immediate SQL
 pub const EXCSQLSTT: u16 = 0x200B; // Execute SQL Statement
-pub const OPNQRY: u16 = 0x200C;    // Open Query
+pub const OPNQRY: u16 = 0x200C; // Open Query
 pub const PRPSQLSTT: u16 = 0x200D; // Prepare SQL Statement
-pub const RDBCMM: u16 = 0x200E;    // RDB Commit Unit of Work
-pub const CNTQRY: u16 = 0x200F;    // Continue Query
+pub const RDBCMM: u16 = 0x200E; // RDB Commit Unit of Work
+pub const CNTQRY: u16 = 0x200F; // Continue Query
 pub const RDBRLLBCK: u16 = 0x2010; // RDB Rollback Unit of Work
 
 // ============================================================
 // SQL Reply Data Objects
 // ============================================================
-pub const SQLCARD: u16 = 0x2408;   // SQL Communications Area Reply Data
-pub const SQLDARD: u16 = 0x2411;   // SQL Descriptor Area Reply Data
-pub const SQLDTA: u16 = 0x2412;    // SQL Program Variable Data
-pub const SQLSTT: u16 = 0x2414;    // SQL Statement
-pub const QRYDSC: u16 = 0x241A;    // Query Answer Set Description
-pub const QRYDTA: u16 = 0x241B;    // Query Answer Set Data
+pub const SQLCARD: u16 = 0x2408; // SQL Communications Area Reply Data
+pub const SQLDARD: u16 = 0x2411; // SQL Descriptor Area Reply Data
+pub const SQLDTA: u16 = 0x2412; // SQL Program Variable Data
+pub const SQLSTT: u16 = 0x2414; // SQL Statement
+pub const QRYDSC: u16 = 0x241A; // Query Answer Set Description
+pub const QRYDTA: u16 = 0x241B; // Query Answer Set Data
 
 // ============================================================
 // Reply Messages
 // ============================================================
-pub const SVRCOD: u16 = 0x1149;    // Severity Code
-pub const ENDQRYRM: u16 = 0x220B;  // End of Query Reply Message
-pub const OPNQRYRM: u16 = 0x2205;  // Open Query Complete Reply Message
-pub const RDBUPDRM: u16 = 0x2218;  // RDB Update Reply Message
-pub const SYNTAXRM: u16 = 0x124C;  // Data Stream Syntax Error Reply Message
-pub const PRCCNVRM: u16 = 0x1245;  // Conversational Protocol Error Reply Message
+pub const SVRCOD: u16 = 0x1149; // Severity Code
+pub const ENDQRYRM: u16 = 0x220B; // End of Query Reply Message
+pub const OPNQRYRM: u16 = 0x2205; // Open Query Complete Reply Message
+pub const RDBUPDRM: u16 = 0x2218; // RDB Update Reply Message
+pub const SYNTAXRM: u16 = 0x124C; // Data Stream Syntax Error Reply Message
+pub const PRCCNVRM: u16 = 0x1245; // Conversational Protocol Error Reply Message
 
 // ============================================================
 // Manager Code Points
 // ============================================================
-pub const AGENT: u16 = 0x1403;     // Agent Manager
-pub const SQLAM: u16 = 0x2407;     // SQL Application Manager
-pub const RDB: u16 = 0x240F;       // Relational Database
-pub const SECMGR: u16 = 0x1440;    // Security Manager
-pub const CMNTCPIP: u16 = 0x1474;  // TCP/IP Communication Manager
+pub const AGENT: u16 = 0x1403; // Agent Manager
+pub const SQLAM: u16 = 0x2407; // SQL Application Manager
+pub const RDB: u16 = 0x240F; // Relational Database
+pub const SECMGR: u16 = 0x1440; // Security Manager
+pub const CMNTCPIP: u16 = 0x1474; // TCP/IP Communication Manager
 
 // ============================================================
 // Security Mechanism Values
 // ============================================================
-pub const SECMEC_USRIDPWD: u16 = 0x0003;    // User ID and password
-pub const SECMEC_USRIDONL: u16 = 0x0004;    // User ID only
-pub const SECMEC_USRIDNWPWD: u16 = 0x0005;  // User ID and new password
-pub const SECMEC_EUSRIDPWD: u16 = 0x0009;   // Encrypted user ID and password
+pub const SECMEC_USRIDPWD: u16 = 0x0003; // User ID and password
+pub const SECMEC_USRIDONL: u16 = 0x0004; // User ID only
+pub const SECMEC_USRIDNWPWD: u16 = 0x0005; // User ID and new password
+pub const SECMEC_EUSRIDPWD: u16 = 0x0009; // Encrypted user ID and password
 
 // ============================================================
 // Package / Query Parameters
 // ============================================================
-pub const PKGNAMCSN: u16 = 0x2113;  // Package Name, Consistency Token, Section Number
-pub const PKGID: u16 = 0x2159;      // Package Identifier
-pub const RDBCOLID: u16 = 0x2108;   // RDB Collection Identifier
-pub const OUTOVR: u16 = 0x2415;     // Output Override
-pub const QRYBLKSZ: u16 = 0x2114;   // Query Block Size
-pub const MAXBLKEXT: u16 = 0x2141;  // Maximum Number of Extra Blocks
-pub const QRYPRCTYP: u16 = 0x2102;  // Query Protocol Type
-pub const NBRROW: u16 = 0x213A;     // Number of Fetch or Insert Rows
-pub const RTNSQLDA: u16 = 0x2116;   // Return SQL Descriptor Area
-pub const TYPSQLDA: u16 = 0x2146;   // Type of SQL Descriptor Area
-pub const UOWDSP: u16 = 0x2115;     // Unit of Work Disposition
-pub const STTDEC: u16 = 0x2101;     // Statement Decimal Delimiter
-pub const STTSTRDEL: u16 = 0x2104;  // Statement String Delimiter
-pub const PKGSN: u16 = 0x2139;      // Package Section Number
-pub const MONITOR: u16 = 0x1900;    // Monitor
-pub const RDBCMTOK: u16 = 0x2105;   // RDB Commit Allowed
+pub const PKGNAMCSN: u16 = 0x2113; // Package Name, Consistency Token, Section Number
+pub const PKGID: u16 = 0x2159; // Package Identifier
+pub const RDBCOLID: u16 = 0x2108; // RDB Collection Identifier
+pub const OUTOVR: u16 = 0x2415; // Output Override
+pub const QRYBLKSZ: u16 = 0x2114; // Query Block Size
+pub const MAXBLKEXT: u16 = 0x2141; // Maximum Number of Extra Blocks
+pub const QRYPRCTYP: u16 = 0x2102; // Query Protocol Type
+pub const NBRROW: u16 = 0x213A; // Number of Fetch or Insert Rows
+pub const RTNSQLDA: u16 = 0x2116; // Return SQL Descriptor Area
+pub const TYPSQLDA: u16 = 0x2146; // Type of SQL Descriptor Area
+pub const UOWDSP: u16 = 0x2115; // Unit of Work Disposition
+pub const STTDEC: u16 = 0x2101; // Statement Decimal Delimiter
+pub const STTSTRDEL: u16 = 0x2104; // Statement String Delimiter
+pub const PKGSN: u16 = 0x2139; // Package Section Number
+pub const MONITOR: u16 = 0x1900; // Monitor
+pub const RDBCMTOK: u16 = 0x2105; // RDB Commit Allowed
 
 // ============================================================
 // FD:OCA
 // ============================================================
-pub const FDODSC: u16 = 0x2101;     // FD:OCA Data Descriptor
-pub const FDODTA: u16 = 0x147A;     // FD:OCA Data
+pub const FDODSC: u16 = 0x2101; // FD:OCA Data Descriptor
+pub const FDODTA: u16 = 0x147A; // FD:OCA Data
 
 // ============================================================
 // Security Check Code
 // ============================================================
-pub const SECCHKCD: u16 = 0x11A4;   // Security Check Code
+pub const SECCHKCD: u16 = 0x11A4; // Security Check Code
 
 // ============================================================
 // Severity Code Values
@@ -135,24 +135,24 @@ pub const QRYPRCTYP_LMTBLKPRC: u16 = 0x0003; // Limited Block Query Protocol
 // ============================================================
 // TYPSQLDA Values
 // ============================================================
-pub const TYPSQLDA_STD_OUTPUT: u16 = 0x0000;  // Standard output SQLDA
-pub const TYPSQLDA_STD_INPUT: u16 = 0x0001;   // Standard input SQLDA
+pub const TYPSQLDA_STD_OUTPUT: u16 = 0x0000; // Standard output SQLDA
+pub const TYPSQLDA_STD_INPUT: u16 = 0x0001; // Standard input SQLDA
 pub const TYPSQLDA_LIGHT_OUTPUT: u16 = 0x0002; // Light output SQLDA
-pub const TYPSQLDA_LIGHT_INPUT: u16 = 0x0003;  // Light input SQLDA
-pub const TYPSQLDA_X_OUTPUT: u16 = 0x0004;     // Extended output SQLDA
-pub const TYPSQLDA_X_INPUT: u16 = 0x0005;      // Extended input SQLDA
+pub const TYPSQLDA_LIGHT_INPUT: u16 = 0x0003; // Light input SQLDA
+pub const TYPSQLDA_X_OUTPUT: u16 = 0x0004; // Extended output SQLDA
+pub const TYPSQLDA_X_INPUT: u16 = 0x0005; // Extended input SQLDA
 
 // ============================================================
 // UOWDSP Values
 // ============================================================
-pub const UOWDSP_COMMIT: u16 = 0x0001;   // Commit at end
+pub const UOWDSP_COMMIT: u16 = 0x0001; // Commit at end
 pub const UOWDSP_ROLLBACK: u16 = 0x0002; // Rollback at end
 
 // ============================================================
 // SQL Error Reply Messages
 // ============================================================
-pub const SQLERRRM: u16 = 0x2213;  // SQL Error Reply Message
-pub const CMDCHKRM: u16 = 0x1254;  // Command Check Reply Message
-pub const DTAMCHRM: u16 = 0x1218;  // Data Descriptor Mismatch Reply Message
-pub const OBJNSPRM: u16 = 0x1253;  // Object Not Supported Reply Message
-pub const RDBNACRM: u16 = 0x2204;  // RDB Not Accessed Reply Message
+pub const SQLERRRM: u16 = 0x2213; // SQL Error Reply Message
+pub const CMDCHKRM: u16 = 0x1254; // Command Check Reply Message
+pub const DTAMCHRM: u16 = 0x1218; // Data Descriptor Mismatch Reply Message
+pub const OBJNSPRM: u16 = 0x1253; // Object Not Supported Reply Message
+pub const RDBNACRM: u16 = 0x2204; // RDB Not Accessed Reply Message

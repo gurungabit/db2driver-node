@@ -1,5 +1,4 @@
-/// Parse SQL error reply messages (SQLERRRM and related).
-
+//! Parse SQL error reply messages (SQLERRRM and related).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

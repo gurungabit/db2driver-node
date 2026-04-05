@@ -1,4 +1,4 @@
-/// EBCDIC Code Page 037 (US/Canada/Netherlands) to Unicode/ASCII conversion.
+//! EBCDIC Code Page 037 (US/Canada/Netherlands) to Unicode/ASCII conversion.
 
 /// EBCDIC 037 -> Unicode mapping table (256 entries).
 /// Each index is an EBCDIC byte value; the value is the corresponding Unicode code point.

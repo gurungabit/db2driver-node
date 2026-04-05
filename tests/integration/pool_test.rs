@@ -69,9 +69,7 @@ async fn test_pool_recovers_from_broken_connection() {
     let pool = Arc::new(create_pool(2).await);
 
     // Run a query to establish connections
-    pool.query("VALUES 1", &[])
-        .await
-        .expect("initial query");
+    pool.query("VALUES 1", &[]).await.expect("initial query");
 
     // Subsequent queries should still work even if a connection was recycled
     for _ in 0..10 {

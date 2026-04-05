@@ -22,7 +22,10 @@ async fn test_prepared_select_with_params() {
 
     client
         .query(
-            &format!("INSERT INTO {} VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')", table),
+            &format!(
+                "INSERT INTO {} VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')",
+                table
+            ),
             &[],
         )
         .await
@@ -139,9 +142,7 @@ async fn test_prepared_many_params() {
     drop_table(&client, &table).await;
 
     // Create table with 20 columns
-    let col_defs: Vec<String> = (1..=20)
-        .map(|i| format!("c{} INTEGER", i))
-        .collect();
+    let col_defs: Vec<String> = (1..=20).map(|i| format!("c{} INTEGER", i)).collect();
     client
         .query(
             &format!("CREATE TABLE {} ({})", table, col_defs.join(", ")),
@@ -162,12 +163,12 @@ async fn test_prepared_many_params() {
 
     // Build 20 integer parameters
     let params: Vec<Db2Value> = (1..=20).map(|i| Db2Value::Integer(i)).collect();
-    let param_refs: Vec<&dyn db2_client::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn db2_client::ToSql)
-        .collect();
+    let param_refs: Vec<&dyn db2_client::ToSql> =
+        params.iter().map(|p| p as &dyn db2_client::ToSql).collect();
 
-    stmt.execute(&param_refs).await.expect("execute with 20 params");
+    stmt.execute(&param_refs)
+        .await
+        .expect("execute with 20 params");
     stmt.close().await.expect("close stmt");
 
     let result = client

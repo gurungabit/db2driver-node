@@ -55,11 +55,19 @@ fn test_rdbnam_padding() {
 
     // Verify the first 6 bytes are EBCDIC for "testdb"
     let expected_prefix = utf8_to_ebcdic037("testdb");
-    assert_eq!(&padded[..6], &expected_prefix[..], "prefix should be EBCDIC 'testdb'");
+    assert_eq!(
+        &padded[..6],
+        &expected_prefix[..],
+        "prefix should be EBCDIC 'testdb'"
+    );
 
     // Remaining 12 bytes should be EBCDIC space (0x40)
     for i in 6..18 {
-        assert_eq!(padded[i], 0x40, "byte {} should be EBCDIC space (0x40), got 0x{:02X}", i, padded[i]);
+        assert_eq!(
+            padded[i], 0x40,
+            "byte {} should be EBCDIC space (0x40), got 0x{:02X}",
+            i, padded[i]
+        );
     }
 }
 
@@ -97,7 +105,11 @@ fn test_pad_ebcdic_custom_length() {
 #[test]
 fn test_ebcdic_empty_string() {
     let ebcdic = utf8_to_ebcdic037("");
-    assert_eq!(ebcdic.len(), 0, "empty string should produce empty EBCDIC bytes");
+    assert_eq!(
+        ebcdic.len(),
+        0,
+        "empty string should produce empty EBCDIC bytes"
+    );
 
     let back = ebcdic037_to_utf8(&[]);
     assert_eq!(back, "", "empty EBCDIC bytes should produce empty string");

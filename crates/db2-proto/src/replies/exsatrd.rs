@@ -1,5 +1,4 @@
-/// Parse EXSATRD (Exchange Server Attributes Reply Data).
-
+//! Parse EXSATRD (Exchange Server Attributes Reply Data).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

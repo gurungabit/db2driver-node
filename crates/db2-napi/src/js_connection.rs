@@ -79,16 +79,6 @@ impl JsClient {
         }
     }
 
-    /// Get access to the underlying config.
-    pub(crate) fn config(&self) -> &db2_client::Config {
-        &self.config
-    }
-
-    /// Get a clone of the inner Arc for pool release operations.
-    pub(crate) fn inner_arc(&self) -> Arc<Mutex<Option<db2_client::Client>>> {
-        self.inner.clone()
-    }
-
     #[napi]
     pub async fn connect(&self) -> Result<()> {
         let mut client = db2_client::Client::new(self.config.clone());
@@ -157,7 +147,7 @@ impl JsClient {
     #[napi]
     pub async fn close(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
-        if let Some(mut client) = guard.take() {
+        if let Some(client) = guard.take() {
             client.close().await.map_err(client_error_to_napi)?;
         }
         Ok(())

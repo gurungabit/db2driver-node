@@ -1,5 +1,4 @@
-/// Build PRPSQLSTT (Prepare SQL Statement) command.
-
+//! Build PRPSQLSTT (Prepare SQL Statement) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

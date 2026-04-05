@@ -136,7 +136,10 @@ impl ToSql for Db2Value {
             Db2Value::BigInt(_) => Db2Type::BigInt,
             Db2Value::Real(_) => Db2Type::Real,
             Db2Value::Double(_) => Db2Type::Double,
-            Db2Value::Decimal(_) => Db2Type::Decimal { precision: 15, scale: 2 },
+            Db2Value::Decimal(_) => Db2Type::Decimal {
+                precision: 15,
+                scale: 2,
+            },
             Db2Value::Char(s) => Db2Type::Char(s.len() as u16),
             Db2Value::VarChar(s) => Db2Type::VarChar(s.len() as u16),
             Db2Value::Binary(b) => Db2Type::VarBinary(b.len() as u16),

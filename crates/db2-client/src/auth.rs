@@ -9,23 +9,12 @@ use db2_proto::ddm::DdmObject;
 use db2_proto::dss::{DssReader, DssWriter};
 
 /// Information about the DB2 server, gathered during the authentication handshake.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServerInfo {
     pub product_name: String,
     pub server_release: String,
     pub server_class: String,
     pub manager_levels: Vec<(u16, u16)>,
-}
-
-impl Default for ServerInfo {
-    fn default() -> Self {
-        ServerInfo {
-            product_name: String::new(),
-            server_release: String::new(),
-            server_class: String::new(),
-            manager_levels: Vec::new(),
-        }
-    }
 }
 
 /// Perform the full DRDA authentication handshake.
@@ -61,7 +50,9 @@ pub async fn authenticate(
     // Keep reading until we can parse at least 2 frames
     let frames = loop {
         let mut reader = DssReader::new(recv_buf.to_vec());
-        let frames = reader.read_all_frames().map_err(|e| Error::Protocol(e.to_string()))?;
+        let frames = reader
+            .read_all_frames()
+            .map_err(|e| Error::Protocol(e.to_string()))?;
         if frames.len() >= 2 {
             let remaining = reader.into_remaining();
             recv_buf = BytesMut::from(remaining.as_slice());
@@ -75,8 +66,8 @@ pub async fn authenticate(
     // Parse EXSATRD
     let exsatrd_frame = &frames[0];
     trace!("Received frame 0: type={:?}", exsatrd_frame.header.dss_type);
-    let (exsatrd_obj, _) = DdmObject::parse(&exsatrd_frame.payload)
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+    let (exsatrd_obj, _) =
+        DdmObject::parse(&exsatrd_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
     if exsatrd_obj.code_point == codepoints::EXSATRD {
         let attrs = db2_proto::replies::exsatrd::parse_exsatrd(&exsatrd_obj)
@@ -95,9 +86,12 @@ pub async fn authenticate(
 
     // Parse ACCSECRD
     let accsecrd_frame = &frames[1];
-    trace!("Received frame 1: type={:?}", accsecrd_frame.header.dss_type);
-    let (accsecrd_obj, _) = DdmObject::parse(&accsecrd_frame.payload)
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+    trace!(
+        "Received frame 1: type={:?}",
+        accsecrd_frame.header.dss_type
+    );
+    let (accsecrd_obj, _) =
+        DdmObject::parse(&accsecrd_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
     if accsecrd_obj.code_point == codepoints::ACCSECRD {
         let reply = db2_proto::replies::accsecrd::parse_accsecrd(&accsecrd_obj)
@@ -140,7 +134,9 @@ pub async fn authenticate(
 
     let frames = loop {
         let mut reader = DssReader::new(recv_buf.to_vec());
-        let frames = reader.read_all_frames().map_err(|e| Error::Protocol(e.to_string()))?;
+        let frames = reader
+            .read_all_frames()
+            .map_err(|e| Error::Protocol(e.to_string()))?;
         if frames.len() >= 2 {
             break frames;
         }
@@ -150,8 +146,8 @@ pub async fn authenticate(
     // Parse SECCHKRM
     let secchkrm_frame = &frames[0];
     trace!("Received SECCHKRM frame");
-    let (secchkrm_obj, _) = DdmObject::parse(&secchkrm_frame.payload)
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+    let (secchkrm_obj, _) =
+        DdmObject::parse(&secchkrm_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
     if secchkrm_obj.code_point == codepoints::SECCHKRM {
         let reply = db2_proto::replies::secchkrm::parse_secchkrm(&secchkrm_obj)
@@ -174,8 +170,8 @@ pub async fn authenticate(
     // Parse ACCRDBRM
     let accrdbrm_frame = &frames[1];
     trace!("Received ACCRDBRM frame");
-    let (accrdbrm_obj, _) = DdmObject::parse(&accrdbrm_frame.payload)
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+    let (accrdbrm_obj, _) =
+        DdmObject::parse(&accrdbrm_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
     if accrdbrm_obj.code_point == codepoints::ACCRDBRM {
         let reply = db2_proto::replies::accrdbrm::parse_accrdbrm(&accrdbrm_obj)

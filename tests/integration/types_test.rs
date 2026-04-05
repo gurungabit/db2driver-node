@@ -21,10 +21,7 @@ async fn test_null_handling() {
         .expect("create table");
 
     client
-        .query(
-            &format!("INSERT INTO {} VALUES (1, NULL)", table),
-            &[],
-        )
+        .query(&format!("INSERT INTO {} VALUES (1, NULL)", table), &[])
         .await
         .expect("insert null");
 
@@ -51,7 +48,10 @@ async fn test_mixed_nulls() {
 
     client
         .query(
-            &format!("CREATE TABLE {} (a INTEGER, b VARCHAR(20), c INTEGER)", table),
+            &format!(
+                "CREATE TABLE {} (a INTEGER, b VARCHAR(20), c INTEGER)",
+                table
+            ),
             &[],
         )
         .await
@@ -69,7 +69,10 @@ async fn test_mixed_nulls() {
         .expect("insert mixed nulls");
 
     let result = client
-        .query(&format!("SELECT * FROM {} ORDER BY COALESCE(a, 999)", table), &[])
+        .query(
+            &format!("SELECT * FROM {} ORDER BY COALESCE(a, 999)", table),
+            &[],
+        )
         .await
         .expect("select");
     assert_eq!(result.rows.len(), 2);
@@ -86,10 +89,7 @@ async fn test_integer_types() {
 
     client
         .query(
-            &format!(
-                "CREATE TABLE {} (s SMALLINT, i INTEGER, b BIGINT)",
-                table
-            ),
+            &format!("CREATE TABLE {} (s SMALLINT, i INTEGER, b BIGINT)", table),
             &[],
         )
         .await
@@ -135,10 +135,7 @@ async fn test_float_types() {
     drop_table(&client, &table).await;
 
     client
-        .query(
-            &format!("CREATE TABLE {} (f REAL, d DOUBLE)", table),
-            &[],
-        )
+        .query(&format!("CREATE TABLE {} (f REAL, d DOUBLE)", table), &[])
         .await
         .expect("create table");
 
@@ -223,7 +220,10 @@ async fn test_string_types() {
     // ASCII
     client
         .query(
-            &format!("INSERT INTO {} VALUES ('hello     ', 'world', 'long text value here')", table),
+            &format!(
+                "INSERT INTO {} VALUES ('hello     ', 'world', 'long text value here')",
+                table
+            ),
             &[],
         )
         .await
@@ -260,10 +260,7 @@ async fn test_date_time_types() {
 
     client
         .query(
-            &format!(
-                "CREATE TABLE {} (d DATE, t TIME, ts TIMESTAMP)",
-                table
-            ),
+            &format!("CREATE TABLE {} (d DATE, t TIME, ts TIMESTAMP)", table),
             &[],
         )
         .await
@@ -323,7 +320,10 @@ async fn test_boolean_type() {
 
     client
         .query(
-            &format!("INSERT INTO {} VALUES (1, TRUE), (2, FALSE), (3, NULL)", table),
+            &format!(
+                "INSERT INTO {} VALUES (1, TRUE), (2, FALSE), (3, NULL)",
+                table
+            ),
             &[],
         )
         .await

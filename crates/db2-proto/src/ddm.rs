@@ -9,7 +9,6 @@
 ///   - length: u16 BE (total length including this 4-byte header)
 ///   - code_point: u16 BE
 ///   - data: remaining bytes
-
 use crate::{ProtoError, Result};
 
 /// A parsed DDM parameter (nested within a DDM object).
@@ -129,7 +128,9 @@ impl DdmObject {
 
     /// Find a specific parameter by code point.
     pub fn find_param(&self, code_point: u16) -> Option<DdmParam> {
-        self.parameters().into_iter().find(|p| p.code_point == code_point)
+        self.parameters()
+            .into_iter()
+            .find(|p| p.code_point == code_point)
     }
 
     /// Total serialized length of this DDM object.

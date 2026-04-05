@@ -1,7 +1,6 @@
-/// Build SECCHK (Security Check) command.
-
-use crate::codepoints::*;
+//! Build SECCHK (Security Check) command.
 use crate::codepage::utf8_to_ebcdic037;
+use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
 /// Build a SECCHK DDM command with user ID and password.

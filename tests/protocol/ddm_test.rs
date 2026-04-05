@@ -1,7 +1,7 @@
+use db2_proto::codepoints;
 /// Protocol-level unit tests for DDM (Distributed Data Management) building and parsing.
 /// These tests do NOT require a DB2 server.
 use db2_proto::ddm::*;
-use db2_proto::codepoints;
 
 // ---------------------------------------------------------------------------
 // Basic DDM build / parse
@@ -17,7 +17,11 @@ fn test_ddm_build_simple() {
     // DDM header is 4 bytes: length (u16 BE) + code point (u16 BE)
     assert!(bytes.len() >= 4, "DDM must have at least a header");
     let ddm_length = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
-    assert_eq!(ddm_length, bytes.len(), "DDM length field must match actual length");
+    assert_eq!(
+        ddm_length,
+        bytes.len(),
+        "DDM length field must match actual length"
+    );
 
     let code_point = u16::from_be_bytes([bytes[2], bytes[3]]);
     assert_eq!(code_point, codepoints::EXCSAT);
@@ -55,7 +59,10 @@ fn test_ddm_nested_params() {
 fn test_ddm_roundtrip() {
     let mut builder = DdmBuilder::new(codepoints::ACCSEC);
     builder.write_u16_param(codepoints::SECMEC, codepoints::SECMEC_USRIDPWD);
-    builder.write_bytes_param(codepoints::RDBNAM, &db2_proto::codepage::pad_rdbnam("TESTDB"));
+    builder.write_bytes_param(
+        codepoints::RDBNAM,
+        &db2_proto::codepage::pad_rdbnam("TESTDB"),
+    );
     let built = builder.finish();
 
     let ddm = Ddm::parse(&built).expect("roundtrip parse");
@@ -86,7 +93,11 @@ fn test_ddm_excsat_build() {
 
     let bytes = builder.finish();
     let code_point = u16::from_be_bytes([bytes[2], bytes[3]]);
-    assert_eq!(code_point, codepoints::EXCSAT, "code point should be EXCSAT");
+    assert_eq!(
+        code_point,
+        codepoints::EXCSAT,
+        "code point should be EXCSAT"
+    );
 
     // Verify we can parse it back
     let ddm = Ddm::parse(&bytes).expect("parse EXCSAT");
@@ -100,7 +111,11 @@ fn test_ddm_empty_data() {
     let builder = DdmBuilder::new(codepoints::RDBCMM);
     let bytes = builder.finish();
 
-    assert_eq!(bytes.len(), 4, "empty DDM should be exactly 4 bytes (header only)");
+    assert_eq!(
+        bytes.len(),
+        4,
+        "empty DDM should be exactly 4 bytes (header only)"
+    );
     let ddm = Ddm::parse(&bytes).expect("parse empty DDM");
     assert_eq!(ddm.code_point(), codepoints::RDBCMM);
     let params: Vec<DdmParam> = ddm.params().collect();

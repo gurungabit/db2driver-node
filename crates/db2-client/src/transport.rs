@@ -11,7 +11,7 @@ use crate::error::Error;
 /// Transport layer abstraction over TCP and TLS connections.
 pub enum Transport {
     Tcp(TcpStream),
-    Tls(tokio_rustls::client::TlsStream<TcpStream>),
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
 
 impl Transport {
@@ -41,7 +41,7 @@ impl Transport {
         if config.ssl {
             debug!("Upgrading connection to TLS");
             let tls_stream = Self::upgrade_tls(stream, config).await?;
-            Ok(Transport::Tls(tls_stream))
+            Ok(Transport::Tls(Box::new(tls_stream)))
         } else {
             Ok(Transport::Tcp(stream))
         }
@@ -78,8 +78,9 @@ impl Transport {
         if let Some(ssl) = ssl_config {
             if let Some(ca_cert_path) = &ssl.ca_cert {
                 // Load CA certificate from file
-                let ca_data = std::fs::read(ca_cert_path)
-                    .map_err(|e| Error::Tls(format!("Failed to read CA cert {}: {}", ca_cert_path, e)))?;
+                let ca_data = std::fs::read(ca_cert_path).map_err(|e| {
+                    Error::Tls(format!("Failed to read CA cert {}: {}", ca_cert_path, e))
+                })?;
                 let mut cursor = std::io::Cursor::new(ca_data);
                 let certs = rustls_pemfile::certs(&mut cursor)
                     .collect::<Result<Vec<_>, _>>()
@@ -126,9 +127,7 @@ impl Transport {
         trace!("Read {} bytes from transport", n);
 
         if n == 0 {
-            return Err(Error::Connection(
-                "Connection closed by server".to_string(),
-            ));
+            return Err(Error::Connection("Connection closed by server".to_string()));
         }
 
         Ok(n)

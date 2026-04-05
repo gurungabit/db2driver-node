@@ -1,5 +1,4 @@
-/// Build RDBCMM (RDB Commit Unit of Work) command.
-
+//! Build RDBCMM (RDB Commit Unit of Work) command.
 use crate::codepoints::RDBCMM;
 use crate::ddm::DdmBuilder;
 

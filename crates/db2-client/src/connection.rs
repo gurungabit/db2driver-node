@@ -1,6 +1,6 @@
+use bytes::BytesMut;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use bytes::BytesMut;
 use tracing::{debug, trace};
 
 use crate::auth::{self, ServerInfo};
@@ -49,14 +49,18 @@ impl ClientInner {
 
     /// Send raw bytes over the transport.
     pub async fn send_bytes(&mut self, data: &[u8]) -> Result<(), Error> {
-        let transport = self.transport.as_mut()
+        let transport = self
+            .transport
+            .as_mut()
             .ok_or_else(|| Error::Connection("Transport not initialized".into()))?;
         transport.write_bytes(data).await
     }
 
     /// Read DSS frames from the transport, waiting for at least `min_frames` frames.
     pub async fn read_frames(&mut self, min_frames: usize) -> Result<Vec<DssFrame>, Error> {
-        let transport = self.transport.as_mut()
+        let transport = self
+            .transport
+            .as_mut()
             .ok_or_else(|| Error::Connection("Transport not initialized".into()))?;
 
         // Ensure we have enough data
@@ -66,7 +70,8 @@ impl ClientInner {
 
         loop {
             let mut reader = DssReader::new(self.recv_buf.to_vec());
-            let frames = reader.read_all_frames()
+            let frames = reader
+                .read_all_frames()
                 .map_err(|e| Error::Protocol(e.to_string()))?;
             if frames.len() >= min_frames {
                 let remaining = reader.into_remaining();
@@ -84,8 +89,7 @@ impl ClientInner {
 
     /// Parse a DDM object from a DSS frame payload.
     pub fn parse_ddm(payload: &[u8]) -> Result<DdmObject, Error> {
-        let (obj, _) = DdmObject::parse(payload)
-            .map_err(|e| Error::Protocol(e.to_string()))?;
+        let (obj, _) = DdmObject::parse(payload).map_err(|e| Error::Protocol(e.to_string()))?;
         Ok(obj)
     }
 
@@ -97,12 +101,9 @@ impl ClientInner {
         let section_number = self.next_section_number();
 
         // Build PKGNAMCSN and commands
-        let pkgnamcsn = db2_proto::commands::build_default_pkgnamcsn(
-            &self.config.database,
-            section_number,
-        );
-        let excsqlimm_data =
-            db2_proto::commands::excsqlimm::build_excsqlimm_default(&pkgnamcsn);
+        let pkgnamcsn =
+            db2_proto::commands::build_default_pkgnamcsn(&self.config.database, section_number);
+        let excsqlimm_data = db2_proto::commands::excsqlimm::build_excsqlimm_default(&pkgnamcsn);
         let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
 
         // Wrap in DSS: EXCSQLIMM (Request, chained) + SQLSTT (Object, not chained)
@@ -134,12 +135,9 @@ impl ClientInner {
 
         // Step 1: Prepare the statement (PRPSQLSTT + SQLSTT)
         let corr_id = self.next_correlation_id();
-        let pkgnamcsn = db2_proto::commands::build_default_pkgnamcsn(
-            &self.config.database,
-            section_number,
-        );
-        let prpsqlstt_data =
-            db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
+        let pkgnamcsn =
+            db2_proto::commands::build_default_pkgnamcsn(&self.config.database, section_number);
+        let prpsqlstt_data = db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
         let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
 
         let mut writer = DssWriter::new(corr_id);
@@ -156,7 +154,8 @@ impl ClientInner {
         let is_query = sql_is_query(sql);
 
         if is_query {
-            self.execute_open_query(&pkgnamcsn, params, &column_info).await
+            self.execute_open_query(&pkgnamcsn, params, &column_info)
+                .await
         } else {
             self.execute_with_params(&pkgnamcsn, params).await
         }
@@ -198,8 +197,7 @@ impl ClientInner {
         params: &[&dyn ToSql],
     ) -> Result<QueryResult, Error> {
         let corr_id = self.next_correlation_id();
-        let excsqlstt_data =
-            db2_proto::commands::excsqlstt::build_excsqlstt_default(pkgnamcsn);
+        let excsqlstt_data = db2_proto::commands::excsqlstt::build_excsqlstt_default(pkgnamcsn);
         let sqldta_data = build_sqldta(params);
 
         let mut writer = DssWriter::new(corr_id);
@@ -288,18 +286,17 @@ impl ClientInner {
         }
 
         // If not end of query, continue fetching
-        if !end_of_query && qrydsc_descriptors.is_some() {
-            let mut cursor = Cursor::new(
-                column_info.to_vec(),
-                qrydsc_descriptors.unwrap(),
-                self.config.fetch_size,
-            );
+        if !end_of_query {
+            if let Some(descriptors) = qrydsc_descriptors {
+                let mut cursor =
+                    Cursor::new(column_info.to_vec(), descriptors, self.config.fetch_size);
 
-            loop {
-                let (more_rows, done) = cursor.fetch_next_from(self).await?;
-                rows.extend(more_rows);
-                if done {
-                    break;
+                loop {
+                    let (more_rows, done) = cursor.fetch_next_from(self).await?;
+                    rows.extend(more_rows);
+                    if done {
+                        break;
+                    }
                 }
             }
         }
@@ -308,10 +305,7 @@ impl ClientInner {
     }
 
     /// Process reply frames from an execute (non-query) statement.
-    async fn process_execute_reply(
-        &mut self,
-        frames: &[DssFrame],
-    ) -> Result<QueryResult, Error> {
+    async fn process_execute_reply(&mut self, frames: &[DssFrame]) -> Result<QueryResult, Error> {
         let mut row_count: i64 = 0;
         let mut columns = Vec::new();
 
@@ -369,10 +363,7 @@ impl ClientInner {
     }
 
     /// Parse the reply to a PRPSQLSTT (prepare) command.
-    pub fn parse_prepare_reply(
-        &self,
-        frames: &[DssFrame],
-    ) -> Result<Vec<ColumnInfo>, Error> {
+    pub fn parse_prepare_reply(&self, frames: &[DssFrame]) -> Result<Vec<ColumnInfo>, Error> {
         let mut columns = Vec::new();
 
         for frame in frames {
@@ -487,11 +478,6 @@ impl Client {
         }
     }
 
-    /// Create a Client from an already-initialized ClientInner (used internally).
-    pub(crate) fn from_inner(inner: Arc<Mutex<ClientInner>>) -> Self {
-        Client { inner }
-    }
-
     /// Connect to the DB2 server, performing TLS upgrade and DRDA authentication.
     pub async fn connect(&mut self) -> Result<(), Error> {
         let config = {
@@ -503,8 +489,7 @@ impl Client {
         let mut transport = Transport::connect(&config).await?;
 
         // Perform DRDA authentication handshake
-        let (server_info, next_corr_id) =
-            auth::authenticate(&mut transport, &config).await?;
+        let (server_info, next_corr_id) = auth::authenticate(&mut transport, &config).await?;
 
         // Store the connected state
         let mut guard = self.inner.lock().await;
@@ -525,11 +510,7 @@ impl Client {
     }
 
     /// Execute a SQL query or statement with optional parameters.
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: &[&dyn ToSql],
-    ) -> Result<QueryResult, Error> {
+    pub async fn query(&self, sql: &str, params: &[&dyn ToSql]) -> Result<QueryResult, Error> {
         let mut guard = self.inner.lock().await;
         if !guard.connected {
             return Err(Error::Connection("Not connected".into()));
@@ -543,10 +524,7 @@ impl Client {
     }
 
     /// Prepare a SQL statement for later execution with parameters.
-    pub async fn prepare(
-        &self,
-        sql: &str,
-    ) -> Result<crate::statement::PreparedStatement, Error> {
+    pub async fn prepare(&self, sql: &str) -> Result<crate::statement::PreparedStatement, Error> {
         let mut guard = self.inner.lock().await;
         if !guard.connected {
             return Err(Error::Connection("Not connected".into()));
@@ -554,14 +532,11 @@ impl Client {
 
         let section_number = guard.next_section_number();
         let corr_id = guard.next_correlation_id();
-        let pkgnamcsn = db2_proto::commands::build_default_pkgnamcsn(
-            &guard.config.database,
-            section_number,
-        );
+        let pkgnamcsn =
+            db2_proto::commands::build_default_pkgnamcsn(&guard.config.database, section_number);
 
         // Send PRPSQLSTT + SQLSTT
-        let prpsqlstt_data =
-            db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
+        let prpsqlstt_data = db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
         let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
 
         let mut writer = DssWriter::new(corr_id);

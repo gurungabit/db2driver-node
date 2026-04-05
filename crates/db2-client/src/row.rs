@@ -38,14 +38,20 @@ impl Row {
     /// Check if a column value is NULL. Column name matching is case-insensitive.
     pub fn is_null(&self, column: &str) -> bool {
         match self.column_map.get(&column.to_uppercase()) {
-            Some(idx) => matches!(self.values.get(*idx), Some(db2_proto::types::Db2Value::Null)),
+            Some(idx) => matches!(
+                self.values.get(*idx),
+                Some(db2_proto::types::Db2Value::Null)
+            ),
             None => true,
         }
     }
 
     /// Check if a column value is NULL by index.
     pub fn is_null_by_index(&self, index: usize) -> bool {
-        matches!(self.values.get(index), Some(db2_proto::types::Db2Value::Null) | None)
+        matches!(
+            self.values.get(index),
+            Some(db2_proto::types::Db2Value::Null) | None
+        )
     }
 
     /// Return the column names for this row.

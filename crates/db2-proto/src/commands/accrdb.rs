@@ -1,7 +1,6 @@
-/// Build ACCRDB (Access RDB) command.
-
-use crate::codepoints::*;
+//! Build ACCRDB (Access RDB) command.
 use crate::codepage::pad_rdbnam;
+use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
 /// Default product identifier (mimics JCC driver).

@@ -36,7 +36,10 @@ async fn test_select_empty_result() {
 
     client
         .query(
-            &format!("CREATE TABLE {} (id INTEGER NOT NULL, name VARCHAR(50))", table),
+            &format!(
+                "CREATE TABLE {} (id INTEGER NOT NULL, name VARCHAR(50))",
+                table
+            ),
             &[],
         )
         .await
@@ -48,7 +51,10 @@ async fn test_select_empty_result() {
         .expect("select from empty table");
     assert_eq!(result.rows.len(), 0);
     assert_eq!(result.row_count, 0);
-    assert!(result.columns.len() >= 2, "should describe columns even for empty result");
+    assert!(
+        result.columns.len() >= 2,
+        "should describe columns even for empty result"
+    );
 
     drop_table(&client, &table).await;
     client.close().await.expect("close");
@@ -62,7 +68,10 @@ async fn test_select_large_result_set() {
 
     client
         .query(
-            &format!("CREATE TABLE {} (id INTEGER NOT NULL, val VARCHAR(20))", table),
+            &format!(
+                "CREATE TABLE {} (id INTEGER NOT NULL, val VARCHAR(20))",
+                table
+            ),
             &[],
         )
         .await
@@ -75,7 +84,10 @@ async fn test_select_large_result_set() {
          SELECT n, 'row_' || CHAR(n) FROM t",
         table
     );
-    client.query(&insert_sql, &[]).await.expect("insert 10K rows");
+    client
+        .query(&insert_sql, &[])
+        .await
+        .expect("insert 10K rows");
 
     let result = client
         .query(&format!("SELECT * FROM {}", table), &[])
@@ -110,10 +122,7 @@ async fn test_insert_and_select() {
         .expect("insert rows");
 
     let result = client
-        .query(
-            &format!("SELECT id, name FROM {} ORDER BY id", table),
-            &[],
-        )
+        .query(&format!("SELECT id, name FROM {} ORDER BY id", table), &[])
         .await
         .expect("select rows");
     assert_eq!(result.rows.len(), 2);
@@ -164,10 +173,7 @@ async fn test_delete_returns_row_count() {
     drop_table(&client, &table).await;
 
     client
-        .query(
-            &format!("CREATE TABLE {} (id INTEGER)", table),
-            &[],
-        )
+        .query(&format!("CREATE TABLE {} (id INTEGER)", table), &[])
         .await
         .expect("create table");
 
@@ -180,10 +186,7 @@ async fn test_delete_returns_row_count() {
         .expect("insert");
 
     let result = client
-        .query(
-            &format!("DELETE FROM {} WHERE id > 2", table),
-            &[],
-        )
+        .query(&format!("DELETE FROM {} WHERE id > 2", table), &[])
         .await
         .expect("delete");
     assert_eq!(result.row_count, 3, "should report 3 rows deleted");
@@ -202,7 +205,9 @@ async fn test_syntax_error() {
     let msg = err.to_string();
     // DB2 should return some kind of SQL error
     assert!(
-        err.sqlstate().is_some() || msg.to_lowercase().contains("sql") || msg.to_lowercase().contains("syntax"),
+        err.sqlstate().is_some()
+            || msg.to_lowercase().contains("sql")
+            || msg.to_lowercase().contains("syntax"),
         "Error should indicate SQL syntax problem, got: {}",
         msg
     );
@@ -232,7 +237,10 @@ async fn test_column_metadata() {
         .expect("create table");
 
     let result = client
-        .query(&format!("SELECT * FROM {} FETCH FIRST 0 ROWS ONLY", table), &[])
+        .query(
+            &format!("SELECT * FROM {} FETCH FIRST 0 ROWS ONLY", table),
+            &[],
+        )
         .await
         .expect("select for metadata");
 

@@ -1,5 +1,4 @@
-/// Parse OPNQRYRM (Open Query Complete Reply Message).
-
+//! Parse OPNQRYRM (Open Query Complete Reply Message).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

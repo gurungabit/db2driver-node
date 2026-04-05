@@ -1,4 +1,5 @@
-/// Parse SQLCARD (SQL Communications Area Reply Data).
+//! Parse SQLCARD (SQL Communications Area Reply Data).
+use crate::codepage::ebcdic037_to_utf8;
 ///
 /// SQLCARD contains:
 ///   - Null indicator (1 byte): 0xFF = null (success, no details), 0x00 = has data
@@ -10,9 +11,7 @@
 ///       - SQLERRD (6 x i32 = 24 bytes) — sqlerrd[2] (3rd element) = row count for DML
 ///       - SQLWARN (11 bytes of warning flags)
 ///       - SQLERRMC (length-prefixed EBCDIC string with tokens separated by 0xFF)
-
 use crate::codepoints::SQLCARD;
-use crate::codepage::ebcdic037_to_utf8;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};
 
@@ -106,7 +105,12 @@ pub fn parse_sqlcard_data(data: &[u8]) -> Result<SqlCard> {
     let mut offset = 1;
 
     // SQLCODE: 4 bytes BE i32
-    let sqlcode = i32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
+    let sqlcode = i32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]);
     offset += 4;
 
     // SQLSTATE: 5 bytes EBCDIC
@@ -129,9 +133,9 @@ pub fn parse_sqlcard_data(data: &[u8]) -> Result<SqlCard> {
 
         if caxgrp_null != 0xFF && offset + 24 <= data.len() {
             // SQLERRD: 6 x i32 = 24 bytes
-            for i in 0..6 {
+            for item in &mut sqlerrd {
                 if offset + 4 <= data.len() {
-                    sqlerrd[i] = i32::from_be_bytes([
+                    *item = i32::from_be_bytes([
                         data[offset],
                         data[offset + 1],
                         data[offset + 2],

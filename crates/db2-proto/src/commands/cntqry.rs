@@ -1,5 +1,4 @@
-/// Build CNTQRY (Continue Query) command.
-
+//! Build CNTQRY (Continue Query) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

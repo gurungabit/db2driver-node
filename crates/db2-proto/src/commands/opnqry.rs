@@ -1,5 +1,4 @@
-/// Build OPNQRY (Open Query) command.
-
+//! Build OPNQRY (Open Query) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

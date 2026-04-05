@@ -1,8 +1,7 @@
-/// Build SQLSTT (SQL Statement) DDM object.
-///
-/// SQLSTT carries the SQL text. It is typically sent as a chained Object DSS
-/// following a PRPSQLSTT, EXCSQLIMM, or EXCSQLSTT command.
-
+//! Build SQLSTT (SQL Statement) DDM object.
+//!
+//! SQLSTT carries the SQL text. It is typically sent as a chained Object DSS
+//! following a PRPSQLSTT, EXCSQLIMM, or EXCSQLSTT command.
 use crate::codepoints::SQLSTT;
 use crate::ddm::DdmBuilder;
 

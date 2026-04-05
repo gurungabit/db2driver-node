@@ -1,6 +1,7 @@
 use crate::js_connection::{JsColumnInfo, JsQueryResult};
 
 /// Convert a db2_client::Config from our JS-facing connection config.
+#[allow(clippy::too_many_arguments)]
 pub fn config_from_js(
     host: &str,
     port: Option<u32>,
@@ -64,10 +65,7 @@ pub fn query_result_to_js(result: db2_client::types::QueryResult) -> JsQueryResu
 }
 
 /// Convert a single Row to a JSON object using column names as keys.
-fn row_to_json(
-    row: &db2_client::Row,
-    col_names: &[String],
-) -> serde_json::Value {
+fn row_to_json(row: &db2_client::Row, col_names: &[String]) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     for name in col_names {
         let is_null = row.is_null(name);
@@ -78,8 +76,8 @@ fn row_to_json(
         } else if let Some(v) = row.get::<i64>(name) {
             map.insert(name.clone(), serde_json::Value::Number(v.into()));
         } else if let Some(v) = row.get::<f64>(name) {
-            let num = serde_json::Number::from_f64(v)
-                .unwrap_or_else(|| serde_json::Number::from(0));
+            let num =
+                serde_json::Number::from_f64(v).unwrap_or_else(|| serde_json::Number::from(0));
             map.insert(name.clone(), serde_json::Value::Number(num));
         } else if let Some(v) = row.get::<bool>(name) {
             map.insert(name.clone(), serde_json::Value::Bool(v));
@@ -88,46 +86,6 @@ fn row_to_json(
         }
     }
     serde_json::Value::Object(map)
-}
-
-/// Convert a Db2Value to a serde_json::Value for transport to JS.
-fn db2_value_to_json(val: &db2_proto::types::Db2Value) -> serde_json::Value {
-    use db2_proto::types::Db2Value;
-    match val {
-        Db2Value::Null => serde_json::Value::Null,
-        Db2Value::SmallInt(v) => serde_json::Value::Number((*v).into()),
-        Db2Value::Integer(v) => serde_json::Value::Number((*v).into()),
-        Db2Value::BigInt(v) => serde_json::Value::Number((*v).into()),
-        Db2Value::Real(v) => {
-            serde_json::Number::from_f64(*v as f64)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
-        Db2Value::Double(v) => {
-            serde_json::Number::from_f64(*v)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
-        Db2Value::Decimal(v) => serde_json::Value::String(v.clone()),
-        Db2Value::Char(v) | Db2Value::VarChar(v) => {
-            serde_json::Value::String(v.clone())
-        }
-        Db2Value::Binary(v) => {
-            serde_json::Value::Array(
-                v.iter().map(|b| serde_json::Value::Number((*b).into())).collect(),
-            )
-        }
-        Db2Value::Date(v) => serde_json::Value::String(v.clone()),
-        Db2Value::Time(v) => serde_json::Value::String(v.clone()),
-        Db2Value::Timestamp(v) => serde_json::Value::String(v.clone()),
-        Db2Value::Boolean(v) => serde_json::Value::Bool(*v),
-        Db2Value::Clob(v) | Db2Value::Xml(v) => serde_json::Value::String(v.clone()),
-        Db2Value::Blob(v) => {
-            serde_json::Value::Array(
-                v.iter().map(|b| serde_json::Value::Number((*b).into())).collect(),
-            )
-        }
-    }
 }
 
 /// Convert JavaScript parameter values (passed as serde_json::Value) to Vec<Db2Value>.

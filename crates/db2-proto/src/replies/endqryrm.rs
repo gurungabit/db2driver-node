@@ -1,7 +1,6 @@
-/// Parse ENDQRYRM (End of Query Reply Message).
-///
-/// This reply signals that the query result set is exhausted.
-
+//! Parse ENDQRYRM (End of Query Reply Message).
+//!
+//! This reply signals that the query result set is exhausted.
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

@@ -1,7 +1,6 @@
 /// FD:OCA (Formatted Data Object Content Architecture) decoder.
 ///
 /// Parses column descriptors from QRYDSC and decodes row data from QRYDTA.
-
 use crate::types::{self, Db2Type, Db2Value};
 use crate::{ProtoError, Result};
 
@@ -20,9 +19,9 @@ pub struct ColumnDescriptor {
 
 /// FD:OCA triplet types used in QRYDSC.
 /// Each triplet is: length(1) + type(1) + data.
-const TRIPLET_TYPE_SDA: u8 = 0x70;  // Structured Data Area
-const TRIPLET_TYPE_RLO: u8 = 0x71;  // Row Layout Object
-const TRIPLET_TYPE_GDA: u8 = 0x76;  // Group Data Area
+const TRIPLET_TYPE_SDA: u8 = 0x70; // Structured Data Area
+const TRIPLET_TYPE_RLO: u8 = 0x71; // Row Layout Object
+const TRIPLET_TYPE_GDA: u8 = 0x76; // Group Data Area
 
 /// Parse FD:OCA triplets from QRYDSC payload to produce column descriptors.
 ///
@@ -198,10 +197,7 @@ pub fn decode_row(data: &[u8], columns: &[ColumnDescriptor]) -> Result<(Vec<Db2V
 ///
 /// The first byte of QRYDTA is often a consistency byte or row indicator.
 /// In limited-block protocol, rows are packed sequentially until the data ends.
-pub fn decode_rows(
-    data: &[u8],
-    columns: &[ColumnDescriptor],
-) -> Result<Vec<Vec<Db2Value>>> {
+pub fn decode_rows(data: &[u8], columns: &[ColumnDescriptor]) -> Result<Vec<Vec<Db2Value>>> {
     let mut rows = Vec::new();
     let mut offset = 0;
 
@@ -360,7 +356,11 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
         }
         Db2Type::Timestamp => {
             // Timestamp length can vary; use the descriptor length or default 26
-            let flen = if col.length > 0 { col.length as usize } else { 26 };
+            let flen = if col.length > 0 {
+                col.length as usize
+            } else {
+                26
+            };
             if data.len() < flen {
                 return Err(ProtoError::BufferTooShort {
                     expected: flen,

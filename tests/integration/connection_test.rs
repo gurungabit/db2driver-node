@@ -23,11 +23,17 @@ async fn test_connect_wrong_password() {
     let mut config = test_config();
     config.password = "definitely_wrong_password_12345".into();
     let mut client = Client::new(config);
-    let err = client.connect().await.expect_err("should fail with wrong password");
+    let err = client
+        .connect()
+        .await
+        .expect_err("should fail with wrong password");
     // Should be an authentication error
     let msg = err.to_string().to_lowercase();
     assert!(
-        msg.contains("auth") || msg.contains("password") || msg.contains("security") || err.is_auth_error(),
+        msg.contains("auth")
+            || msg.contains("password")
+            || msg.contains("security")
+            || err.is_auth_error(),
         "Error should indicate authentication failure, got: {}",
         err
     );
@@ -38,10 +44,16 @@ async fn test_connect_wrong_database() {
     let mut config = test_config();
     config.database = "nonexistent_db_xyz".into();
     let mut client = Client::new(config);
-    let err = client.connect().await.expect_err("should fail with wrong database");
+    let err = client
+        .connect()
+        .await
+        .expect_err("should fail with wrong database");
     let msg = err.to_string().to_lowercase();
     assert!(
-        msg.contains("database") || msg.contains("rdb") || msg.contains("not found") || msg.contains("not accessed"),
+        msg.contains("database")
+            || msg.contains("rdb")
+            || msg.contains("not found")
+            || msg.contains("not accessed"),
         "Error should indicate database not found, got: {}",
         err
     );
@@ -53,7 +65,10 @@ async fn test_connect_wrong_host() {
     config.host = "192.0.2.1".into(); // TEST-NET address, should not be routable
     config.connect_timeout = std::time::Duration::from_secs(2);
     let mut client = Client::new(config);
-    let err = client.connect().await.expect_err("should fail connecting to bad host");
+    let err = client
+        .connect()
+        .await
+        .expect_err("should fail connecting to bad host");
     let msg = err.to_string().to_lowercase();
     assert!(
         msg.contains("timeout") || msg.contains("connect") || msg.contains("refused"),

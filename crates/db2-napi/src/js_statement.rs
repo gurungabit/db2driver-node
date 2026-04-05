@@ -23,10 +23,7 @@ impl JsPreparedStatement {
 #[napi]
 impl JsPreparedStatement {
     #[napi]
-    pub async fn execute(
-        &self,
-        params: Option<Vec<serde_json::Value>>,
-    ) -> Result<JsQueryResult> {
+    pub async fn execute(&self, params: Option<Vec<serde_json::Value>>) -> Result<JsQueryResult> {
         let mut guard = self.inner.lock().await;
         let stmt = guard
             .as_mut()

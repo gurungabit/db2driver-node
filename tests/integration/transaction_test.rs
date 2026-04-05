@@ -55,10 +55,7 @@ async fn test_rollback() {
 
     // Insert one row outside transaction
     client
-        .query(
-            &format!("INSERT INTO {} VALUES (1, 'before')", table),
-            &[],
-        )
+        .query(&format!("INSERT INTO {} VALUES (1, 'before')", table), &[])
         .await
         .expect("insert before txn");
 
@@ -77,7 +74,11 @@ async fn test_rollback() {
         .query(&format!("SELECT * FROM {}", table), &[])
         .await
         .expect("select after rollback");
-    assert_eq!(result.rows.len(), 1, "rolled-back row should not be visible");
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "rolled-back row should not be visible"
+    );
 
     drop_table(&client, &table).await;
     client.close().await.expect("close");
@@ -114,13 +115,19 @@ async fn test_transfer_atomicity() {
     // Transfer 200 from Alice to Bob in a transaction
     let txn = client.begin_transaction().await.expect("begin");
     txn.query(
-        &format!("UPDATE {} SET balance = balance - 200.00 WHERE account = 'alice'", table),
+        &format!(
+            "UPDATE {} SET balance = balance - 200.00 WHERE account = 'alice'",
+            table
+        ),
         &[],
     )
     .await
     .expect("debit alice");
     txn.query(
-        &format!("UPDATE {} SET balance = balance + 200.00 WHERE account = 'bob'", table),
+        &format!(
+            "UPDATE {} SET balance = balance + 200.00 WHERE account = 'bob'",
+            table
+        ),
         &[],
     )
     .await

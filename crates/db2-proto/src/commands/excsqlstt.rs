@@ -1,5 +1,4 @@
-/// Build EXCSQLSTT (Execute SQL Statement) command.
-
+//! Build EXCSQLSTT (Execute SQL Statement) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

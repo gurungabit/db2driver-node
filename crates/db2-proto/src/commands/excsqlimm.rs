@@ -1,5 +1,4 @@
-/// Build EXCSQLIMM (Execute Immediate SQL) command.
-
+//! Build EXCSQLIMM (Execute Immediate SQL) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

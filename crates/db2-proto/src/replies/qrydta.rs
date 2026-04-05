@@ -1,8 +1,7 @@
-/// Parse QRYDTA (Query Answer Set Data).
-///
-/// QRYDTA wraps the raw row data returned by the server.
-/// The actual row format depends on the column descriptors from QRYDSC or SQLDARD.
-
+//! Parse QRYDTA (Query Answer Set Data).
+//!
+//! QRYDTA wraps the raw row data returned by the server.
+//! The actual row format depends on the column descriptors from QRYDSC or SQLDARD.
 use crate::codepoints::QRYDTA;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

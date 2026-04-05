@@ -1,4 +1,5 @@
-/// Parse SQLDARD (SQL Descriptor Area Reply Data).
+//! Parse SQLDARD (SQL Descriptor Area Reply Data).
+use crate::codepage::ebcdic037_to_utf8;
 ///
 /// Contains column metadata for a prepared statement or open query.
 /// The format is:
@@ -6,9 +7,7 @@
 ///   - Number of columns: u16 BE
 ///   - For each column:
 ///     - Column descriptor data (type, length, precision, scale, name, etc.)
-
 use crate::codepoints::SQLDARD;
-use crate::codepage::ebcdic037_to_utf8;
 use crate::ddm::DdmObject;
 use crate::replies::sqlcard::{parse_sqlcard_data, SqlCard};
 use crate::types::Db2Type;
@@ -94,7 +93,7 @@ pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
             if caxgrp_null != 0xFF {
                 offset += 24; // SQLERRD (6 * 4)
                 offset += 11; // SQLWARN
-                // SQLERRMC length-prefixed
+                              // SQLERRMC length-prefixed
                 if offset + 2 <= data.len() {
                     let errmc_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                     offset += 2 + errmc_len;
@@ -115,7 +114,8 @@ pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
             }
         }
 
-        sqlcard = parse_sqlcard_data(&data[sqlcard_start..offset]).unwrap_or_else(|_| SqlCard::success());
+        sqlcard =
+            parse_sqlcard_data(&data[sqlcard_start..offset]).unwrap_or_else(|_| SqlCard::success());
     }
 
     // Number of columns
@@ -184,8 +184,14 @@ fn parse_column_descriptor(data: &[u8], index: usize) -> Result<(ColumnMetadata,
 
     // SQLLENGTH: 8 bytes (i64), but we only need the lower 2 or 4 bytes
     let length_i64 = i64::from_be_bytes([
-        data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
-        data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
     ]);
     offset += 8;
     let length = length_i64 as u16;
@@ -240,7 +246,8 @@ fn parse_column_descriptor(data: &[u8], index: usize) -> Result<(ColumnMetadata,
                 let comments_null = data[offset];
                 offset += 1;
                 if comments_null != 0xFF && offset + 2 <= data.len() {
-                    let comments_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                    let comments_len =
+                        u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                     offset += 2;
                     offset += comments_len; // skip comments
                 }
@@ -255,7 +262,8 @@ fn parse_column_descriptor(data: &[u8], index: usize) -> Result<(ColumnMetadata,
                     // UDT schema (2 + len), UDT name (2 + len)
                     for _ in 0..2 {
                         if offset + 2 <= data.len() {
-                            let flen = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                            let flen =
+                                u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                             offset += 2 + flen;
                         }
                     }
@@ -269,13 +277,15 @@ fn parse_column_descriptor(data: &[u8], index: usize) -> Result<(ColumnMetadata,
                 if dx_null != 0xFF {
                     // SQLBASECOLNM
                     if offset + 2 <= data.len() {
-                        let bcol_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                        let bcol_len =
+                            u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                         offset += 2;
                         offset += bcol_len;
                     }
                     // SQLSCHEMA
                     if offset + 2 <= data.len() {
-                        let schema_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                        let schema_len =
+                            u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                         offset += 2;
                         if offset + schema_len <= data.len() {
                             schema_name = ebcdic037_to_utf8(&data[offset..offset + schema_len])

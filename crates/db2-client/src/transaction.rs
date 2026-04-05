@@ -29,20 +29,12 @@ impl Transaction {
     }
 
     /// Execute a SQL query or statement within this transaction.
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: &[&dyn ToSql],
-    ) -> Result<QueryResult, Error> {
+    pub async fn query(&self, sql: &str, params: &[&dyn ToSql]) -> Result<QueryResult, Error> {
         if self.committed {
-            return Err(Error::Other(
-                "Transaction already committed".into(),
-            ));
+            return Err(Error::Other("Transaction already committed".into()));
         }
         if self.rolled_back {
-            return Err(Error::Other(
-                "Transaction already rolled back".into(),
-            ));
+            return Err(Error::Other("Transaction already rolled back".into()));
         }
 
         let mut guard = self.inner.lock().await;
@@ -61,14 +53,10 @@ impl Transaction {
     /// Consumes the Transaction.
     pub async fn commit(mut self) -> Result<(), Error> {
         if self.committed {
-            return Err(Error::Other(
-                "Transaction already committed".into(),
-            ));
+            return Err(Error::Other("Transaction already committed".into()));
         }
         if self.rolled_back {
-            return Err(Error::Other(
-                "Transaction already rolled back".into(),
-            ));
+            return Err(Error::Other("Transaction already rolled back".into()));
         }
 
         let mut guard = self.inner.lock().await;
@@ -82,14 +70,10 @@ impl Transaction {
     /// Consumes the Transaction.
     pub async fn rollback(mut self) -> Result<(), Error> {
         if self.committed {
-            return Err(Error::Other(
-                "Transaction already committed".into(),
-            ));
+            return Err(Error::Other("Transaction already committed".into()));
         }
         if self.rolled_back {
-            return Err(Error::Other(
-                "Transaction already rolled back".into(),
-            ));
+            return Err(Error::Other("Transaction already rolled back".into()));
         }
 
         let mut guard = self.inner.lock().await;

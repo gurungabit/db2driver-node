@@ -29,11 +29,9 @@ impl JsTransaction {
         params: Option<Vec<serde_json::Value>>,
     ) -> Result<JsQueryResult> {
         let mut guard = self.inner.lock().await;
-        let txn = guard
-            .as_mut()
-            .ok_or_else(|| {
-                napi::Error::from_reason("Transaction is already committed or rolled back")
-            })?;
+        let txn = guard.as_mut().ok_or_else(|| {
+            napi::Error::from_reason("Transaction is already committed or rolled back")
+        })?;
 
         let db2_params = match &params {
             Some(p) => js_params_to_db2(p),
@@ -56,11 +54,9 @@ impl JsTransaction {
     #[napi]
     pub async fn commit(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
-        let txn = guard
-            .take()
-            .ok_or_else(|| {
-                napi::Error::from_reason("Transaction is already committed or rolled back")
-            })?;
+        let txn = guard.take().ok_or_else(|| {
+            napi::Error::from_reason("Transaction is already committed or rolled back")
+        })?;
         txn.commit().await.map_err(client_error_to_napi)?;
         Ok(())
     }
@@ -68,11 +64,9 @@ impl JsTransaction {
     #[napi]
     pub async fn rollback(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
-        let txn = guard
-            .take()
-            .ok_or_else(|| {
-                napi::Error::from_reason("Transaction is already committed or rolled back")
-            })?;
+        let txn = guard.take().ok_or_else(|| {
+            napi::Error::from_reason("Transaction is already committed or rolled back")
+        })?;
         txn.rollback().await.map_err(client_error_to_napi)?;
         Ok(())
     }

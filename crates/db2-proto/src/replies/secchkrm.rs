@@ -1,5 +1,4 @@
-/// Parse SECCHKRM (Security Check Reply Message).
-
+//! Parse SECCHKRM (Security Check Reply Message).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

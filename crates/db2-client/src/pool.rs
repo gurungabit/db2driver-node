@@ -134,11 +134,7 @@ impl Pool {
     }
 
     /// Execute a query using a connection from the pool.
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: &[&dyn ToSql],
-    ) -> Result<QueryResult, Error> {
+    pub async fn query(&self, sql: &str, params: &[&dyn ToSql]) -> Result<QueryResult, Error> {
         let client = self.acquire().await?;
         let result = client.query(sql, params).await;
 
@@ -275,9 +271,6 @@ impl Pool {
     /// Perform a basic health check on a connection.
     pub async fn health_check(client: &Client) -> bool {
         // Execute a simple query to verify the connection is alive
-        match client.execute("VALUES 1").await {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        client.execute("VALUES 1").await.is_ok()
     }
 }

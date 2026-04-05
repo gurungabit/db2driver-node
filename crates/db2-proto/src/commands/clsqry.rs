@@ -1,5 +1,4 @@
-/// Build CLSQRY (Close Query) command.
-
+//! Build CLSQRY (Close Query) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 

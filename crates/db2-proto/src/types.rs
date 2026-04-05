@@ -1,5 +1,4 @@
 /// DB2 SQL type definitions and value encoding/decoding.
-
 use crate::{ProtoError, Result};
 
 // ============================================================
@@ -340,11 +339,7 @@ pub fn decode_packed_decimal(data: &[u8], precision: u8, scale: u8) -> Result<St
 
     // Strip leading zeros but keep at least one digit before decimal point
     let total_digits = digits.len();
-    let integer_digits = if total_digits > scale as usize {
-        total_digits - scale as usize
-    } else {
-        0
-    };
+    let integer_digits = total_digits.saturating_sub(scale as usize);
 
     let mut result = String::new();
     if is_negative {
@@ -419,10 +414,7 @@ pub fn encode_packed_decimal(value: &str, precision: u8, scale: u8) -> Result<Ve
 
     let sign_nibble: u8 = if is_negative { 0x0D } else { 0x0C };
 
-    let mut nibbles: Vec<u8> = digit_str
-        .bytes()
-        .map(|b| b - b'0')
-        .collect();
+    let mut nibbles: Vec<u8> = digit_str.bytes().map(|b| b - b'0').collect();
     nibbles.push(sign_nibble);
 
     // Pack nibbles into bytes

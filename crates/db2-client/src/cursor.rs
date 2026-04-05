@@ -71,9 +71,8 @@ impl Cursor {
             match obj.code_point {
                 codepoints::QRYDTA => {
                     trace!("Cursor: received QRYDTA");
-                    let decoded_rows =
-                        db2_proto::fdoca::decode_rows(&obj.data, &self.descriptors)
-                            .map_err(|e| Error::Protocol(e.to_string()))?;
+                    let decoded_rows = db2_proto::fdoca::decode_rows(&obj.data, &self.descriptors)
+                        .map_err(|e| Error::Protocol(e.to_string()))?;
                     for values in decoded_rows {
                         let col_names: Vec<String> =
                             self.column_info.iter().map(|c| c.name.clone()).collect();
@@ -93,73 +92,16 @@ impl Cursor {
                         return Err(Error::Sql {
                             sqlstate: card.sqlstate,
                             sqlcode: card.sqlcode,
-                            message: format!(
-                                "Error during fetch: {}",
-                                card.sqlerrmc
-                            ),
+                            message: format!("Error during fetch: {}", card.sqlerrmc),
                         });
                     }
                 }
                 _ => {
-                    trace!(
-                        "Cursor: ignoring reply codepoint 0x{:04X}",
-                        obj.code_point
-                    );
+                    trace!("Cursor: ignoring reply codepoint 0x{:04X}", obj.code_point);
                 }
             }
         }
 
         Ok((rows, end_of_query))
-    }
-
-    /// Close the cursor by sending CLSQRY.
-    pub async fn close_with(
-        &mut self,
-        inner: &mut ClientInner,
-    ) -> Result<(), Error> {
-        if self.closed {
-            return Ok(());
-        }
-
-        let corr_id = inner.next_correlation_id();
-        let pkgnamcsn = db2_proto::commands::build_default_pkgnamcsn(
-            &inner.config.database,
-            1,
-        );
-
-        let clsqry_data = db2_proto::commands::clsqry::build_clsqry(&pkgnamcsn);
-
-        let mut writer = DssWriter::new(corr_id);
-        writer.write_request(&clsqry_data, false);
-        let send_buf = writer.finish();
-        inner.send_bytes(&send_buf).await?;
-
-        // Read the close reply
-        let frames = inner.read_reply_frames().await?;
-        for frame in &frames {
-            let obj = ClientInner::parse_ddm(&frame.payload)?;
-            if obj.code_point == codepoints::SQLCARD {
-                let card = db2_proto::replies::sqlcard::parse_sqlcard(&obj)
-                    .map_err(|e| Error::Protocol(e.to_string()))?;
-                if card.is_error() {
-                    return Err(Error::Sql {
-                        sqlstate: card.sqlstate,
-                        sqlcode: card.sqlcode,
-                        message: format!(
-                            "Error closing cursor: {}",
-                            card.sqlerrmc
-                        ),
-                    });
-                }
-            }
-        }
-
-        self.closed = true;
-        Ok(())
-    }
-
-    /// Check if the cursor is closed.
-    pub fn is_closed(&self) -> bool {
-        self.closed
     }
 }

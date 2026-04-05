@@ -1,5 +1,4 @@
-/// Build EXCSAT (Exchange Server Attributes) command.
-
+//! Build EXCSAT (Exchange Server Attributes) command.
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
@@ -13,11 +12,26 @@ pub struct ManagerLevel {
 /// Default manager levels for a DB2 client.
 pub fn default_manager_levels() -> Vec<ManagerLevel> {
     vec![
-        ManagerLevel { code_point: AGENT, level: 7 },
-        ManagerLevel { code_point: SQLAM, level: 7 },
-        ManagerLevel { code_point: RDB, level: 7 },
-        ManagerLevel { code_point: SECMGR, level: 7 },
-        ManagerLevel { code_point: CMNTCPIP, level: 5 },
+        ManagerLevel {
+            code_point: AGENT,
+            level: 7,
+        },
+        ManagerLevel {
+            code_point: SQLAM,
+            level: 7,
+        },
+        ManagerLevel {
+            code_point: RDB,
+            level: 7,
+        },
+        ManagerLevel {
+            code_point: SECMGR,
+            level: 7,
+        },
+        ManagerLevel {
+            code_point: CMNTCPIP,
+            level: 5,
+        },
     ]
 }
 

@@ -1,5 +1,4 @@
-/// Build RDBRLLBCK (RDB Rollback Unit of Work) command.
-
+//! Build RDBRLLBCK (RDB Rollback Unit of Work) command.
 use crate::codepoints::RDBRLLBCK;
 use crate::ddm::DdmBuilder;
 

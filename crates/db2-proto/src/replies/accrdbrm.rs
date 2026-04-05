@@ -1,5 +1,4 @@
-/// Parse ACCRDBRM (Access RDB Reply Message).
-
+//! Parse ACCRDBRM (Access RDB Reply Message).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

@@ -1,5 +1,4 @@
-/// Parse ACCSECRD (Access Security Reply Data).
-
+//! Parse ACCSECRD (Access Security Reply Data).
 use crate::codepoints::*;
 use crate::ddm::DdmObject;
 use crate::{ProtoError, Result};

@@ -46,12 +46,8 @@ impl JsPool {
             connection: client_config.clone(),
             min_connections: config.min_connections.unwrap_or(0),
             max_connections: config.max_connections.unwrap_or(10),
-            idle_timeout: std::time::Duration::from_secs(
-                config.idle_timeout.unwrap_or(60) as u64,
-            ),
-            max_lifetime: std::time::Duration::from_secs(
-                config.max_lifetime.unwrap_or(300) as u64,
-            ),
+            idle_timeout: std::time::Duration::from_secs(config.idle_timeout.unwrap_or(60) as u64),
+            max_lifetime: std::time::Duration::from_secs(config.max_lifetime.unwrap_or(300) as u64),
         };
 
         // Pool::new is async in the client crate, but napi constructors are sync.

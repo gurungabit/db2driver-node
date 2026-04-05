@@ -38,12 +38,19 @@ async fn test_empty_string_vs_null() {
     let row1_val = result.rows[0].get(1);
     match row1_val {
         Some(Db2Value::VarChar(s)) | Some(Db2Value::Char(s)) => {
-            assert!(s.is_empty() || s.trim().is_empty(), "should be empty string, got: '{}'", s);
+            assert!(
+                s.is_empty() || s.trim().is_empty(),
+                "should be empty string, got: '{}'",
+                s
+            );
         }
         other => {
             // Some DB2 configs may return empty string as null; just verify it is not an error
             assert!(
-                matches!(other, Some(&Db2Value::Null) | None | Some(&Db2Value::VarChar(_))),
+                matches!(
+                    other,
+                    Some(&Db2Value::Null) | None | Some(&Db2Value::VarChar(_))
+                ),
                 "unexpected value for empty string: {:?}",
                 other
             );
@@ -72,7 +79,10 @@ async fn test_very_long_sql() {
     let sql = format!("VALUES ('{}')", long_string);
     assert!(sql.len() > 39_000, "SQL should be > 39KB");
 
-    let result = client.query(&sql, &[]).await.expect("long SQL should execute");
+    let result = client
+        .query(&sql, &[])
+        .await
+        .expect("long SQL should execute");
     assert_eq!(result.rows.len(), 1);
 
     client.close().await.expect("close");
@@ -85,28 +95,22 @@ async fn test_special_characters_in_data() {
     drop_table(&client, &table).await;
 
     client
-        .query(
-            &format!("CREATE TABLE {} (val VARCHAR(200))", table),
-            &[],
-        )
+        .query(&format!("CREATE TABLE {} (val VARCHAR(200))", table), &[])
         .await
         .expect("create table");
 
     // Test various special characters (escaped for SQL)
     let test_values = vec![
-        "hello''world",         // single quote (escaped)
-        "line1\nline2",         // newline is just data
-        "tab\there",            // tab
-        "back\\slash",          // backslash
-        "percent%underscore_",  // SQL wildcards as data
+        "hello''world",        // single quote (escaped)
+        "line1\nline2",        // newline is just data
+        "tab\there",           // tab
+        "back\\slash",         // backslash
+        "percent%underscore_", // SQL wildcards as data
     ];
 
     for val in &test_values {
         client
-            .query(
-                &format!("INSERT INTO {} VALUES ('{}')", table, val),
-                &[],
-            )
+            .query(&format!("INSERT INTO {} VALUES ('{}')", table, val), &[])
             .await
             .expect(&format!("insert special chars: {}", val));
     }

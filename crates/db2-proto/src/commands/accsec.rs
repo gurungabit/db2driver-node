@@ -1,7 +1,6 @@
-/// Build ACCSEC (Access Security) command.
-
-use crate::codepoints::*;
+//! Build ACCSEC (Access Security) command.
 use crate::codepage::pad_rdbnam;
+use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
 /// Build an ACCSEC DDM command.

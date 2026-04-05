@@ -131,8 +131,8 @@ fn test_dss_writer_chained() {
     let payload2 = vec![0x03, 0x04];
 
     let mut writer = DssWriter::new(1);
-    writer.write_request(&payload1, true);  // chained
-    writer.write_object(&payload2, false);  // not chained (last in chain)
+    writer.write_request(&payload1, true); // chained
+    writer.write_object(&payload2, false); // not chained (last in chain)
     let data = writer.finish();
 
     let mut reader = DssReader::new(data);
@@ -163,7 +163,10 @@ fn test_parse_captured_handshake() {
     };
     let mut reader = DssReader::new(data);
     let frames = reader.read_all_frames().expect("fixture should parse");
-    assert!(!frames.is_empty(), "fixture should contain at least one frame");
+    assert!(
+        !frames.is_empty(),
+        "fixture should contain at least one frame"
+    );
     // The first frame of an EXCSAT exchange is a Request DSS
     assert_eq!(frames[0].header.dss_type, DssType::Request);
 }

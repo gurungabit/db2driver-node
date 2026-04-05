@@ -20,7 +20,6 @@
 ///   0x03 = Object, not chained
 ///   0x43 = Object, chained
 ///   0x13 = Object, same correlation (continuation)
-
 use crate::{ProtoError, Result};
 
 pub const DSS_MAGIC: u8 = 0xD0;
@@ -138,7 +137,14 @@ impl DssHeader {
         let len_bytes = self.length.to_be_bytes();
         let format = self.dss_type.to_byte() | self.flags.to_byte();
         let corr = self.correlation_id.to_be_bytes();
-        [len_bytes[0], len_bytes[1], DSS_MAGIC, format, corr[0], corr[1]]
+        [
+            len_bytes[0],
+            len_bytes[1],
+            DSS_MAGIC,
+            format,
+            corr[0],
+            corr[1],
+        ]
     }
 }
 
@@ -183,12 +189,7 @@ impl DssWriter {
 
     /// Write a single DDM payload wrapped in one or more DSS segments.
     /// If `chained` is true, the chained flag is set on the first DSS segment.
-    pub fn write_dss(
-        &mut self,
-        dss_type: DssType,
-        chained: bool,
-        payload: &[u8],
-    ) {
+    pub fn write_dss(&mut self, dss_type: DssType, chained: bool, payload: &[u8]) {
         let total = payload.len() + DSS_HEADER_LEN;
 
         if total <= DSS_MAX_SEGMENT_LEN {
@@ -230,7 +231,8 @@ impl DssWriter {
                 };
 
                 self.buffer.extend_from_slice(&header.serialize());
-                self.buffer.extend_from_slice(&payload[offset..offset + chunk_len]);
+                self.buffer
+                    .extend_from_slice(&payload[offset..offset + chunk_len]);
 
                 offset += chunk_len;
                 first = false;
@@ -303,10 +305,8 @@ impl DssReader {
         if self.remaining() < DSS_HEADER_LEN {
             return false;
         }
-        let len = u16::from_be_bytes([
-            self.buffer[self.position],
-            self.buffer[self.position + 1],
-        ]) as usize;
+        let len = u16::from_be_bytes([self.buffer[self.position], self.buffer[self.position + 1]])
+            as usize;
         self.remaining() >= len
     }
 

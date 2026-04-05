@@ -1,5 +1,5 @@
-pub mod codepoints;
 pub mod codepage;
+pub mod codepoints;
 pub mod commands;
 pub mod ddm;
 pub mod dss;
@@ -25,12 +25,20 @@ impl std::fmt::Display for ProtoError {
         match self {
             ProtoError::InvalidMagic(m) => write!(f, "invalid DSS magic byte: 0x{:02X}", m),
             ProtoError::BufferTooShort { expected, actual } => {
-                write!(f, "buffer too short: expected {} bytes, got {}", expected, actual)
+                write!(
+                    f,
+                    "buffer too short: expected {} bytes, got {}",
+                    expected, actual
+                )
             }
             ProtoError::InvalidDssType(t) => write!(f, "invalid DSS type: 0x{:02X}", t),
             ProtoError::InvalidCodePoint(cp) => write!(f, "invalid code point: 0x{:04X}", cp),
             ProtoError::UnexpectedReply { expected, actual } => {
-                write!(f, "unexpected reply: expected 0x{:04X}, got 0x{:04X}", expected, actual)
+                write!(
+                    f,
+                    "unexpected reply: expected 0x{:04X}, got 0x{:04X}",
+                    expected, actual
+                )
             }
             ProtoError::InvalidSqlcard(msg) => write!(f, "invalid SQLCARD: {}", msg),
             ProtoError::EbcdicConversion(msg) => write!(f, "EBCDIC conversion error: {}", msg),
