@@ -1,0 +1,16 @@
+{{ define "main" }}
+<article class="content">
+  {{ .Content }}
+</article>
+{{ $pages := .Pages }}
+{{ if $pages }}
+<nav class="section-nav">
+  <h2>In this section</h2>
+  <ul>
+    {{ range $pages.ByWeight }}
+    <li><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+    {{ end }}
+  </ul>
+</nav>
+{{ end }}
+{{ end }}
