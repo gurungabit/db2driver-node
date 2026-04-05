@@ -1,0 +1,15 @@
+[package]
+name = "db2-client"
+version = "0.1.0"
+edition = "2021"
+description = "Async DB2 client using pure Rust DRDA wire protocol"
+
+[dependencies]
+db2-proto = { path = "../db2-proto" }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "io-util", "sync", "time", "macros"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+bytes = "1"
+thiserror = "2"
+tracing = "0.1"

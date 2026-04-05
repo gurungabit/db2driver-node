@@ -1,0 +1,19 @@
+[package]
+name = "db2-napi"
+version = "0.1.0"
+edition = "2021"
+description = "Node.js bindings for db2-wire via napi-rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+db2-client = { path = "../db2-client" }
+db2-proto = { path = "../db2-proto" }
+napi = { version = "2", features = ["async", "napi8", "serde-json"] }
+napi-derive = "2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[build-dependencies]
+napi-build = "2"

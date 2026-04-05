@@ -1,0 +1,38 @@
+[package]
+name = "db2-integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+db2-client = { path = "../../crates/db2-client" }
+db2-proto = { path = "../../crates/db2-proto" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[[test]]
+name = "connection_test"
+path = "connection_test.rs"
+
+[[test]]
+name = "query_test"
+path = "query_test.rs"
+
+[[test]]
+name = "types_test"
+path = "types_test.rs"
+
+[[test]]
+name = "prepared_stmt_test"
+path = "prepared_stmt_test.rs"
+
+[[test]]
+name = "transaction_test"
+path = "transaction_test.rs"
+
+[[test]]
+name = "pool_test"
+path = "pool_test.rs"
+
+[[test]]
+name = "edge_cases_test"
+path = "edge_cases_test.rs"

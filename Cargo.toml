@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/db2-proto",
+    "crates/db2-client",
+    "crates/db2-napi",
+    "tests/protocol",
+    "tests/integration",
+]
+resolver = "2"

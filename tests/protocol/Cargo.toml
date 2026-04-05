@@ -1,0 +1,20 @@
+[package]
+name = "db2-proto-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+db2-proto = { path = "../../crates/db2-proto" }
+
+[[test]]
+name = "dss_test"
+path = "dss_test.rs"
+
+[[test]]
+name = "ddm_test"
+path = "ddm_test.rs"
+
+[[test]]
+name = "codepage_test"
+path = "codepage_test.rs"

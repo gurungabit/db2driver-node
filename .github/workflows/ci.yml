@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  DB2_TEST_HOST: localhost
+  DB2_TEST_PORT: 50000
+  DB2_TEST_DATABASE: testdb
+  DB2_TEST_USER: db2inst1
+  DB2_TEST_PASSWORD: db2wire_test_pw
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run unit tests
+        run: |
+          cargo test --workspace --lib
+          cargo test -p db2-proto
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Start DB2
+        run: |
+          docker compose -f docker/docker-compose.yml up -d
+          chmod +x tools/db2.sh
+          ./tools/db2.sh status || ./tools/db2.sh start
+
+      - name: Wait for DB2
+        run: |
+          timeout 300 bash -c 'until docker exec db2-wire-test bash -c "su - db2inst1 -c \"db2 connect to testdb\"" > /dev/null 2>&1; do sleep 5; done'
+
+      - name: Seed database
+        run: ./tools/db2.sh seed
+
+      - name: Run integration tests
+        run: cargo test --workspace --test '*' -- --test-threads=4
+
+      - name: Stop DB2
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down
+
+  node-tests:
+    name: Node.js Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build napi module
+        working-directory: crates/db2-napi
+        run: |
+          npm install
+          npm run build
+
+      - name: Start DB2
+        run: |
+          docker compose -f docker/docker-compose.yml up -d
+          chmod +x tools/db2.sh
+
+      - name: Wait for DB2
+        run: |
+          timeout 300 bash -c 'until docker exec db2-wire-test bash -c "su - db2inst1 -c \"db2 connect to testdb\"" > /dev/null 2>&1; do sleep 5; done'
+
+      - name: Seed database
+        run: ./tools/db2.sh seed
+
+      - name: Run Node.js tests
+        working-directory: crates/db2-napi
+        run: npm test
+
+      - name: Stop DB2
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down
