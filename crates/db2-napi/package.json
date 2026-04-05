@@ -1,0 +1,27 @@
+{
+  "name": "db2-wire",
+  "version": "0.1.0",
+  "description": "Zero-dependency DB2 driver for Node.js, built with pure Rust",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --release",
+    "build:debug": "napi build",
+    "test": "node --test"
+  },
+  "napi": {
+    "name": "db2-wire",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
+  },
+  "keywords": ["db2", "database", "drda", "driver", "napi", "rust"],
+  "license": "MIT",
+  "devDependencies": {
+    "@napi-rs/cli": "^2"
+  }
+}

@@ -1,0 +1,8 @@
+[package]
+name = "db2-proto"
+version = "0.1.0"
+edition = "2021"
+description = "Pure DRDA protocol implementation for DB2 - no I/O dependencies"
+
+[dependencies]
+# Zero dependencies - pure protocol crate

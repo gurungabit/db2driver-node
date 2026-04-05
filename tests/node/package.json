@@ -1,0 +1,11 @@
+{
+  "name": "db2-wire-node-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test *.test.ts"
+  },
+  "devDependencies": {
+    "db2-wire": "file:../../crates/db2-napi",
+    "@types/node": "^22"
+  }
+}
