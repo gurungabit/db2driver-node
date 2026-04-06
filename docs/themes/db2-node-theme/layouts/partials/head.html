@@ -2,5 +2,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ if not .IsHome }}{{ .Title }} | {{ end }}{{ .Site.Title }}</title>
 <meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
-<link rel="stylesheet" href="{{ "css/style.css" | relURL }}">
-<script defer src="{{ "js/search.js" | relURL }}"></script>
+{{ $assetVersion := now.Unix }}
+<link rel="stylesheet" href="{{ "css/style.css" | relURL }}?v={{ $assetVersion }}">
+<script defer src="{{ "js/search.js" | relURL }}?v={{ $assetVersion }}"></script>
