@@ -12,7 +12,8 @@ This repository contains the driver, the protocol implementation, the Node.js bi
 - `tests/integration` — Rust integration tests against a real DB2 instance
 - `tests/node` — Node.js integration tests against the public JS API
 - `docs` — Hugo docs site
-- `demo.ts` / `demo-million.ts` — repo-local examples for quick validation and benchmarking
+- `examples/demo.ts` / `examples/demo-million.ts` — repo-local examples for quick validation and benchmarking
+- `examples/todo-app` — full-stack example app using the published Node bindings
 
 ## Package Quick Start
 
@@ -123,13 +124,13 @@ The demos use the same `DB2_TEST_*` environment variables as the test suite.
 Quick end-to-end demo:
 
 ```bash
-npx --yes tsx demo.ts
+npx --yes tsx examples/demo.ts
 ```
 
 Bulk insert/read benchmark:
 
 ```bash
-DEMO_TOTAL_ROWS=100000 npx --yes tsx demo-million.ts
+DEMO_TOTAL_ROWS=100000 npx --yes tsx examples/demo-million.ts
 ```
 
 ## Docs Site

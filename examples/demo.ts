@@ -2,12 +2,12 @@
  * Quick repository demo for db2-node.
  *
  * Run:
- *   npx --yes tsx demo.ts
+ *   npx --yes tsx examples/demo.ts
  *
  * Uses the same DB2_TEST_* environment variables as the integration tests.
  */
 
-import { Client } from "./crates/db2-napi";
+import { Client } from "../crates/db2-napi";
 
 const TABLE_NAME = `DEMO_TS_${Date.now()}`;
 

@@ -2,12 +2,12 @@
  * Bulk insert/read benchmark for db2-node.
  *
  * Run:
- *   DEMO_TOTAL_ROWS=100000 npx --yes tsx demo-million.ts
+ *   DEMO_TOTAL_ROWS=100000 npx --yes tsx examples/demo-million.ts
  *
  * Uses the same DB2_TEST_* environment variables as the integration tests.
  */
 
-import { Client } from "./crates/db2-napi";
+import { Client } from "../crates/db2-napi";
 
 const TOTAL_ROWS = Number(process.env.DEMO_TOTAL_ROWS || 1_000_000);
 const BATCH_SIZE = Number(process.env.DEMO_BATCH_SIZE || 5_000);
@@ -152,7 +152,7 @@ async function main() {
           "\nDB2 transaction log filled during the bulk load. Try a smaller commit interval:",
         );
         console.error(
-          "  DEMO_COMMIT_EVERY=10000 DEMO_BATCH_SIZE=2000 npx --yes tsx demo-million.ts",
+          "  DEMO_COMMIT_EVERY=10000 DEMO_BATCH_SIZE=2000 npx --yes tsx examples/demo-million.ts",
         );
         console.error("For the local Docker DB2 instance, run: ./tools/db2.sh tune");
       }
