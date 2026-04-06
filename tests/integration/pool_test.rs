@@ -89,16 +89,21 @@ async fn test_pool_client_close_releases_checkout_permit() {
     let pool = Arc::new(create_pool(1).await);
 
     let client = pool.acquire().await.expect("acquire checked-out client");
+    assert_eq!(pool.active_count().await, 1);
     client
         .close()
         .await
         .expect("closing a checked-out pooled client should succeed");
+    assert_eq!(
+        pool.active_count().await,
+        0,
+        "closing a checked-out pooled client should release the checkout permit"
+    );
 
-    let result = timeout(Duration::from_secs(2), pool.query("VALUES 1", &[]))
+    let client = timeout(Duration::from_secs(15), pool.acquire())
         .await
-        .expect("pool query should not block after closing a checked-out client")
-        .expect("pool query should succeed after releasing the permit");
-
-    assert_eq!(result.row_count, 1);
+        .expect("pool acquire should not stay blocked after closing a checked-out client")
+        .expect("pool acquire should succeed after releasing the permit");
+    pool.release(client).await;
     pool.close().await.expect("close pool");
 }

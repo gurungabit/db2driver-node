@@ -1345,10 +1345,17 @@ impl Client {
 
     /// Close the connection.
     pub async fn close(&self) -> Result<(), Error> {
+        // Release any pool checkout before attempting transport shutdown so
+        // checked-out pooled clients do not leak permits if close fails.
+        let _checkout = self.detach_pool_checkout().await;
+
         let mut guard = self.inner.lock().await;
+        let mut close_error = None;
         if guard.connected {
             if let Some(transport) = guard.transport.as_mut() {
-                transport.close().await?;
+                if let Err(err) = transport.close().await {
+                    close_error = Some(err);
+                }
             }
             debug!("Connection closed");
         }
@@ -1363,7 +1370,11 @@ impl Client {
         guard.next_prepared_section = 1;
         guard.free_prepared_sections.clear();
         drop(guard);
-        let _ = self.detach_pool_checkout().await;
+
+        if let Some(err) = close_error {
+            return Err(err);
+        }
+
         Ok(())
     }
 
