@@ -174,3 +174,7 @@ The local workspace is in strong release shape:
 - TLS behavior is covered in both Rust and Node tests
 - Prepared statements, pooling, reconnect behavior, and timeout handling have all been hardened
 - The remaining release-risk item is validating the tag-driven publish pipeline with a real release candidate tag
+
+## License
+
+MIT. See `LICENSE`.

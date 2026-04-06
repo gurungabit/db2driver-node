@@ -3,6 +3,7 @@ name = "db2-client"
 version = "0.1.0"
 edition = "2021"
 description = "Async DB2 client using pure Rust DRDA wire protocol"
+license = "MIT"
 
 [dependencies]
 db2-proto = { path = "../db2-proto" }
