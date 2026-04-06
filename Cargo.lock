@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "db2-napi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "db2-client",
  "db2-proto",

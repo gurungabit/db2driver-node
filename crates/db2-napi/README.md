@@ -4,7 +4,7 @@ Pure Rust DB2 driver for Node.js using the DRDA wire protocol directly. No IBM C
 
 ## Status
 
-`0.1.0` is an early release focused on DB2 LUW connectivity, parameterized queries, prepared statements, transactions, connection pooling, and TLS.
+`0.1.x` is an early release series focused on DB2 LUW connectivity, parameterized queries, prepared statements, transactions, connection pooling, and TLS.
 
 ## Install
 
