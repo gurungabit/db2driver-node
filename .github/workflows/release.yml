@@ -43,7 +43,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
             setup: rustup target add aarch64-unknown-linux-musl
-            container_setup: rustup target add aarch64-unknown-linux-musl
+            container_setup: apk add --no-cache zig && rustup target add aarch64-unknown-linux-musl
           - host: macos-15-intel
             target: x86_64-apple-darwin
           - host: macos-latest
