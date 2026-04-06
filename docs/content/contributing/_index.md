@@ -18,8 +18,8 @@ This guide covers the development setup, testing infrastructure, and contributio
 
 ```bash
 # Clone the repo
-git clone https://github.com/gurungabit/db2driver-node.git
-cd db2driver-node
+git clone https://github.com/gurungabit/db2-node.git
+cd db2-node
 
 # Build everything
 make build
@@ -125,7 +125,7 @@ You can run the Hugo docs site locally without installing Hugo on your machine:
 make docs-serve
 ```
 
-This serves the site at `http://localhost:1313/db2driver-node/`.
+This serves the site at `http://localhost:1313/db2-node/`.
 
 To build the static site into `.tmp-docs-public/`:
 
@@ -154,7 +154,7 @@ make docs-build
 ## Code Organization
 
 ```
-db2driver-node/
+db2-node/
 +-- crates/
 |   +-- db2-proto/      # Pure protocol (zero deps, no I/O)
 |   +-- db2-client/     # Async client (tokio)

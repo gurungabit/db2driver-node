@@ -1,5 +1,5 @@
 {
-  "name": "db2-node",
+  "name": "@gurungabit/db2-node",
   "version": "0.1.0",
   "description": "Zero-dependency DB2 driver for Node.js, built with pure Rust",
   "main": "index.cjs",
@@ -18,17 +18,16 @@
     "index.js",
     "index.mjs",
     "index.d.ts",
-    "types.d.ts"
+    "types.d.ts",
+    "db2-node.*.node"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
-    "create:npm": "napi create-npm-dir -t .",
-    "prepublishOnly": "napi prepublish -t npm --tagstyle npm --skip-gh-release",
+    "prepublishOnly": "node ./scripts/verify-prepublish.cjs",
     "test": "node --test"
   },
   "napi": {
@@ -52,13 +51,13 @@
     "napi",
     "rust"
   ],
-  "homepage": "https://github.com/gurungabit/db2driver-node",
+  "homepage": "https://github.com/gurungabit/db2-node",
   "bugs": {
-    "url": "https://github.com/gurungabit/db2driver-node/issues"
+    "url": "https://github.com/gurungabit/db2-node/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gurungabit/db2driver-node.git"
+    "url": "git+https://github.com/gurungabit/db2-node.git"
   },
   "publishConfig": {
     "access": "public"

@@ -5,7 +5,7 @@ weight: 30
 
 # API Reference
 
-Complete TypeScript API reference for db2-node.
+Complete TypeScript API reference for `@gurungabit/db2-node`.
 
 ## Types
 

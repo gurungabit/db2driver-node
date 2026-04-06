@@ -1,4 +1,4 @@
-import { Client } from "db2-node";
+import { Client } from "@gurungabit/db2-node";
 
 let client: Client | null = null;
 let initialized = false;

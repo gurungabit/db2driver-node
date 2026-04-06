@@ -5,7 +5,7 @@ weight: 10
 
 # Getting Started
 
-This guide walks you through installing db2-node, connecting to a DB2 database, and running your first queries.
+This guide walks you through installing `@gurungabit/db2-node`, connecting to a DB2 database, and running your first queries.
 
 ## Prerequisites
 
@@ -15,10 +15,10 @@ This guide walks you through installing db2-node, connecting to a DB2 database, 
 ## Installation
 
 ```bash
-npm install db2-node
+npm install @gurungabit/db2-node
 ```
 
-db2-node ships prebuilt native binaries for:
+`@gurungabit/db2-node` ships prebuilt native binaries for:
 - Linux: `x64` glibc, `x64` musl, `arm64` glibc, `arm64` musl
 - macOS: `x64`, `arm64` (Apple Silicon)
 - Windows: `x64`, `arm64`
@@ -28,7 +28,7 @@ No compiler toolchain needed for supported platforms.
 ## Connecting to DB2
 
 ```typescript
-import { Client } from 'db2-node';
+import { Client } from '@gurungabit/db2-node';
 
 const client = new Client({
   host: 'localhost',
@@ -135,7 +135,7 @@ Transactions also support prepared statements via `tx.prepare()`.
 For applications with concurrent database access:
 
 ```typescript
-import { Pool } from 'db2-node';
+import { Pool } from '@gurungabit/db2-node';
 
 const pool = new Pool({
   host: 'localhost',
@@ -205,8 +205,8 @@ To run a local DB2 instance for development and testing:
 
 ```bash
 # Clone the repository
-git clone https://github.com/gurungabit/db2driver-node.git
-cd db2driver-node
+git clone https://github.com/gurungabit/db2-node.git
+cd db2-node
 
 # Start DB2 in Docker (takes 2-5 min on first run)
 ./tools/db2.sh start

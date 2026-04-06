@@ -10,7 +10,7 @@
   "dependencies": {
     "@tanstack/react-router": "^1.168.10",
     "@tanstack/react-start": "^1.167.16",
-    "db2-node": "file:../../crates/db2-napi",
+    "@gurungabit/db2-node": "file:../../crates/db2-napi",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -21,7 +21,7 @@ db2-node implements the IBM DRDA (Distributed Relational Database Architecture) 
 ## Quick Example
 
 ```typescript
-import { Client } from 'db2-node';
+import { Client } from '@gurungabit/db2-node';
 
 const client = new Client({
   host: 'localhost',
@@ -45,4 +45,4 @@ await client.close();
 
 ## Get Started
 
-Head to the [Getting Started]({{< relref "getting-started/_index.md" >}}) guide to install db2-node and run your first query.
+Head to the [Getting Started]({{< relref "getting-started/_index.md" >}}) guide to install `@gurungabit/db2-node` and run your first query.

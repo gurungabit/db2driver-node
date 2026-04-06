@@ -1,6 +1,6 @@
-# db2-node
+# @gurungabit/db2-node
 
-`db2-node` is a pure Rust DB2 driver for Node.js. It speaks the DRDA wire protocol directly, so there is no IBM CLI, ODBC, or `libdb2` runtime dependency.
+`@gurungabit/db2-node` is a pure Rust DB2 driver for Node.js. It speaks the DRDA wire protocol directly, so there is no IBM CLI, ODBC, or `libdb2` runtime dependency.
 
 This repository contains the driver, the protocol implementation, the Node.js bindings, the docs site, and the integration test harness used to ship the npm package.
 
@@ -8,7 +8,7 @@ This repository contains the driver, the protocol implementation, the Node.js bi
 
 - `crates/db2-proto` — low-level DRDA protocol encoding/decoding
 - `crates/db2-client` — async Rust client, pooling, transactions, TLS, prepared statements
-- `crates/db2-napi` — `napi-rs` bindings published as the `db2-node` npm package
+- `crates/db2-napi` — `napi-rs` bindings published as the `@gurungabit/db2-node` npm package
 - `tests/integration` — Rust integration tests against a real DB2 instance
 - `tests/node` — Node.js integration tests against the public JS API
 - `docs` — Hugo docs site
@@ -18,11 +18,11 @@ This repository contains the driver, the protocol implementation, the Node.js bi
 ## Package Quick Start
 
 ```bash
-npm install db2-node
+npm install @gurungabit/db2-node
 ```
 
 ```ts
-import { Client } from "db2-node";
+import { Client } from "@gurungabit/db2-node";
 
 const client = new Client({
   host: "localhost",
@@ -149,13 +149,13 @@ make docs-serve
 
 Then open:
 
-- `http://localhost:1313/db2driver-node/`
+- `http://localhost:1313/db2-node/`
 
 The local docs site includes search and is configured to match the GitHub Pages subpath.
 
 ## Release Flow
 
-- The npm package is `db2-node`
+- The npm package is `@gurungabit/db2-node`
 - Tag pushes matching `v*` trigger `.github/workflows/release.yml`
 - The release workflow builds prebuilt binaries, smoke-tests module loading, and publishes npm artifacts
 

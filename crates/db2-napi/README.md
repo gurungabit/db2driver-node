@@ -1,4 +1,4 @@
-# db2-node
+# @gurungabit/db2-node
 
 Pure Rust DB2 driver for Node.js using the DRDA wire protocol directly. No IBM CLI, ODBC, or `libdb2` dependency is required at runtime.
 
@@ -9,7 +9,7 @@ Pure Rust DB2 driver for Node.js using the DRDA wire protocol directly. No IBM C
 ## Install
 
 ```bash
-npm install db2-node
+npm install @gurungabit/db2-node
 ```
 
 Prebuilt native binaries ship for supported platforms — no Rust toolchain needed:
@@ -21,7 +21,7 @@ Prebuilt native binaries ship for supported platforms — no Rust toolchain need
 ## Quick Start
 
 ```ts
-import { Client } from 'db2-node'
+import { Client } from '@gurungabit/db2-node'
 
 const client = new Client({
   host: 'localhost',
@@ -45,7 +45,7 @@ await client.close()
 CommonJS also works:
 
 ```js
-const { Client } = require('db2-node')
+const { Client } = require('@gurungabit/db2-node')
 ```
 
 ## Connection Options
@@ -69,7 +69,7 @@ const { Client } = require('db2-node')
 ## Pool
 
 ```ts
-import { Pool } from 'db2-node'
+import { Pool } from '@gurungabit/db2-node'
 
 const pool = new Pool({
   host: 'localhost',

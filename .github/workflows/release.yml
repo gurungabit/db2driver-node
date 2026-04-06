@@ -231,7 +231,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: crates/db2-napi/package-lock.json
@@ -240,27 +240,24 @@ jobs:
         working-directory: crates/db2-napi
         run: npm ci
 
-      - name: Create npm package directories
-        working-directory: crates/db2-napi
-        run: npm run create:npm
-
       - name: Download all binding artifacts
         uses: actions/download-artifact@v8.0.1
         with:
           path: crates/db2-napi/artifacts
 
-      - name: Move artifacts into npm packages
+      - name: Copy artifacts into root package
         working-directory: crates/db2-napi
-        run: npm run artifacts
+        run: find artifacts -name 'db2-node.*.node' -exec cp {} . \;
 
-      - name: Show generated package layout
+      - name: Show package binaries
         working-directory: crates/db2-napi
-        run: find npm -maxdepth 2 -type f | sort
+        run: find . -maxdepth 1 -name 'db2-node.*.node' | sort
 
       - name: Publish release
         working-directory: crates/db2-napi
-        run: |
-          npm config set provenance true
-          npm publish
+        run: npm publish --provenance
         env:
+          # npm trusted publishing via OIDC is preferred.
+          # If trusted publishing is not configured yet, npm falls back to this token.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
