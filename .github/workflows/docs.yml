@@ -35,7 +35,7 @@ jobs:
 
       - name: Build site
         working-directory: docs
-        run: hugo --minify --baseURL "https://gurungabit.github.io/db2driver-node/"
+        run: hugo --minify --baseURL "https://gurungabit.github.io/db2-node/"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4.0.0
