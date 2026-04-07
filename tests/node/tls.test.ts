@@ -63,7 +63,7 @@ describe('TLS: prepared statements', { skip: !sslPort && 'DB2_TEST_SSL_PORT not 
 
     const stmt = await c.prepare('VALUES CAST(? AS INTEGER) + 10');
     const r = await stmt.execute([5]);
-    assert.equal(r.rows[0]['1'], '15');
+    assert.equal(r.rows[0]['1'], 15);
     await stmt.close();
     await c.close();
   });
