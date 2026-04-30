@@ -257,10 +257,19 @@ pub async fn authenticate(
                     format_code_points(&received_code_points)
                 )));
             }
+            codepoints::CMDNSPRM | codepoints::PRMNSPRM | codepoints::VALNSPRM => {
+                return Err(Error::Protocol(format!(
+                    "Server rejected an authentication parameter with {}: {}; received {}",
+                    code_point_name(obj.code_point),
+                    format_reply_detail(&obj),
+                    format_code_points(&received_code_points)
+                )));
+            }
             codepoints::SYNTAXRM | codepoints::CMDCHKRM | codepoints::OBJNSPRM => {
                 return Err(Error::Protocol(format!(
-                    "Server rejected an authentication command with {}; received {}",
+                    "Server rejected an authentication command with {}: {}; received {}",
                     code_point_name(obj.code_point),
+                    format_reply_detail(&obj),
                     format_code_points(&received_code_points)
                 )));
             }
@@ -375,6 +384,9 @@ fn phase2_frames_complete(frames: &[DssFrame], min_success_frames: usize) -> Res
             codepoints::RDBNACRM
             | codepoints::PRCCNVRM
             | codepoints::SYNTAXRM
+            | codepoints::CMDNSPRM
+            | codepoints::PRMNSPRM
+            | codepoints::VALNSPRM
             | codepoints::CMDCHKRM
             | codepoints::OBJNSPRM
             | codepoints::SQLERRRM => return Ok(true),
@@ -417,18 +429,97 @@ fn format_code_points(code_points: &[u16]) -> String {
         .join(", ")
 }
 
+fn format_reply_detail(obj: &DdmObject) -> String {
+    let mut details = Vec::new();
+
+    if let Some(severity) = obj.find_param(codepoints::SVRCOD).and_then(|p| p.as_u16()) {
+        details.push(format!("severity={severity}"));
+    }
+
+    if let Some(code_point) = obj.find_param(codepoints::CODPNT).and_then(|p| p.as_u16()) {
+        details.push(format!(
+            "parameter={}(0x{code_point:04X})",
+            code_point_name(code_point)
+        ));
+    }
+
+    if details.is_empty() {
+        format!("data_len={}", obj.data.len())
+    } else {
+        details.join(", ")
+    }
+}
+
 fn code_point_name(code_point: u16) -> &'static str {
     match code_point {
+        codepoints::EXCSAT => "EXCSAT",
+        codepoints::EXSATRD => "EXSATRD",
+        codepoints::ACCSEC => "ACCSEC",
         codepoints::ACCSECRD => "ACCSECRD",
+        codepoints::SECCHK => "SECCHK",
         codepoints::SECCHKRM => "SECCHKRM",
+        codepoints::ACCRDB => "ACCRDB",
         codepoints::ACCRDBRM => "ACCRDBRM",
+        codepoints::CODPNT => "CODPNT",
+        codepoints::SVRCOD => "SVRCOD",
+        codepoints::SECMEC => "SECMEC",
+        codepoints::SECTKN => "SECTKN",
+        codepoints::USRID => "USRID",
+        codepoints::PASSWORD => "PASSWORD",
+        codepoints::RDBNAM => "RDBNAM",
         codepoints::SQLCARD => "SQLCARD",
         codepoints::RDBNACRM => "RDBNACRM",
         codepoints::PRCCNVRM => "PRCCNVRM",
         codepoints::SYNTAXRM => "SYNTAXRM",
+        codepoints::CMDNSPRM => "CMDNSPRM",
+        codepoints::PRMNSPRM => "PRMNSPRM",
+        codepoints::VALNSPRM => "VALNSPRM",
         codepoints::CMDCHKRM => "CMDCHKRM",
         codepoints::OBJNSPRM => "OBJNSPRM",
         codepoints::SQLERRRM => "SQLERRRM",
         _ => "UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db2_proto::dss::{DssFlags, DssHeader, DssType};
+
+    fn reply_frame(payload: Vec<u8>) -> DssFrame {
+        DssFrame {
+            header: DssHeader {
+                length: (payload.len() + 6) as u16,
+                dss_type: DssType::Reply,
+                flags: DssFlags::none(),
+                correlation_id: 1,
+            },
+            payload,
+        }
+    }
+
+    #[test]
+    fn valnsprm_ends_phase2_read() {
+        let mut builder = db2_proto::ddm::DdmBuilder::new(codepoints::VALNSPRM);
+        builder.add_u16(codepoints::SVRCOD, codepoints::SRVCOD_ERROR);
+        builder.add_u16(codepoints::CODPNT, codepoints::SECMEC);
+
+        let frames = vec![reply_frame(builder.build())];
+
+        assert!(phase2_frames_complete(&frames, 2).unwrap());
+    }
+
+    #[test]
+    fn reply_detail_includes_rejected_parameter() {
+        let mut builder = db2_proto::ddm::DdmBuilder::new(codepoints::VALNSPRM);
+        builder.add_u16(codepoints::SVRCOD, codepoints::SRVCOD_ERROR);
+        builder.add_u16(codepoints::CODPNT, codepoints::SECTKN);
+        let bytes = builder.build();
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+
+        assert_eq!(
+            format_reply_detail(&obj),
+            "severity=8, parameter=SECTKN(0x11DC)"
+        );
     }
 }

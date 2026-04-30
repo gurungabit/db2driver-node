@@ -2297,6 +2297,9 @@ fn reply_codepoint_name(code_point: u16) -> Option<&'static str> {
     match code_point {
         codepoints::SYNTAXRM => Some("SYNTAXRM"),
         codepoints::PRCCNVRM => Some("PRCCNVRM"),
+        codepoints::CMDNSPRM => Some("CMDNSPRM"),
+        codepoints::PRMNSPRM => Some("PRMNSPRM"),
+        codepoints::VALNSPRM => Some("VALNSPRM"),
         codepoints::SQLERRRM => Some("SQLERRRM"),
         codepoints::CMDCHKRM => Some("CMDCHKRM"),
         codepoints::DTAMCHRM => Some("DTAMCHRM"),

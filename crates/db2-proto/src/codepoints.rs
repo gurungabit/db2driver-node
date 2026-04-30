@@ -21,6 +21,7 @@ pub const SRVNAM: u16 = 0x116D; // Server Name
 pub const SRVRLSLV: u16 = 0x115A; // Server Product Release Level
 pub const SRVCLSNM: u16 = 0x1147; // Server Class Name
 pub const MGRLVLLS: u16 = 0x1404; // Manager Level List
+pub const CODPNT: u16 = 0x000C; // Code Point
 pub const SECMEC: u16 = 0x11A2; // Security Mechanism
 pub const SECTKN: u16 = 0x11DC; // Security Token
 pub const USRID: u16 = 0x11A0; // User ID
@@ -69,6 +70,9 @@ pub const OPNQRYRM: u16 = 0x2205; // Open Query Complete Reply Message
 pub const RDBUPDRM: u16 = 0x2218; // RDB Update Reply Message
 pub const SYNTAXRM: u16 = 0x124C; // Data Stream Syntax Error Reply Message
 pub const PRCCNVRM: u16 = 0x1245; // Conversational Protocol Error Reply Message
+pub const CMDNSPRM: u16 = 0x1250; // Command Not Supported Reply Message
+pub const PRMNSPRM: u16 = 0x1251; // Parameter Not Supported Reply Message
+pub const VALNSPRM: u16 = 0x1252; // Parameter Value Not Supported Reply Message
 
 // ============================================================
 // Manager Code Points

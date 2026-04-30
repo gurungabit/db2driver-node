@@ -30,7 +30,10 @@ pub fn default_manager_levels() -> Vec<ManagerLevel> {
         },
         ManagerLevel {
             code_point: SECMGR,
-            level: 9,
+            // The client currently implements the classic SECMEC 9 DES/DH
+            // flow. Advertising level 8+ can make z/OS require newer security
+            // parameters that we do not send yet.
+            level: 7,
         },
         ManagerLevel {
             code_point: UNICODEMGR,
@@ -98,6 +101,19 @@ mod tests {
         assert_eq!(obj.code_point, EXCSAT);
         let params = obj.parameters();
         assert!(params.iter().any(|p| p.code_point == EXTNAM));
-        assert!(params.iter().any(|p| p.code_point == MGRLVLLS));
+        let mgrlvlls = params
+            .iter()
+            .find(|p| p.code_point == MGRLVLLS)
+            .expect("EXCSAT should include manager levels");
+        let secmgr_level = mgrlvlls
+            .data
+            .chunks_exact(4)
+            .find_map(|chunk| {
+                let code_point = u16::from_be_bytes([chunk[0], chunk[1]]);
+                let level = u16::from_be_bytes([chunk[2], chunk[3]]);
+                (code_point == SECMGR).then_some(level)
+            })
+            .expect("EXCSAT should include SECMGR");
+        assert_eq!(secmgr_level, 7);
     }
 }
