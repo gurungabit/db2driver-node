@@ -4,7 +4,7 @@
     "crates/db2-napi": {
       "release-type": "node",
       "package-name": "@gurungabit/db2-node",
-      "changelog-path": "crates/db2-napi/CHANGELOG.md",
+      "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,
       "include-component-in-tag": false
     }
