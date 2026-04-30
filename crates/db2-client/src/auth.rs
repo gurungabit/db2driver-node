@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::transport::Transport;
 use db2_proto::codepoints;
 use db2_proto::ddm::DdmObject;
-use db2_proto::dss::{DssReader, DssWriter};
+use db2_proto::dss::{DssFrame, DssReader, DssWriter};
 
 /// Information about the DB2 server, gathered during the authentication handshake.
 #[derive(Debug, Clone, Default)]
@@ -101,11 +101,11 @@ pub async fn authenticate(
     let (accsecrd_obj, _) =
         DdmObject::parse(&accsecrd_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
-    let accepted_secmec = match accsecrd_obj.code_point {
+    let (accepted_secmec, server_sectkn) = match accsecrd_obj.code_point {
         codepoints::ACCSECRD => {
             let reply = db2_proto::replies::accsecrd::parse_accsecrd(&accsecrd_obj)
                 .map_err(|e| Error::Protocol(e.to_string()))?;
-            reply.security_mechanism
+            (reply.security_mechanism, reply.security_token)
         }
         codepoints::RDBNACRM | 0x221A => {
             // Some DB2 LUW servers reject an unknown RDB name during ACCSEC
@@ -123,41 +123,57 @@ pub async fn authenticate(
     };
 
     debug!(
-        "Phase 1 complete: server={}, secmec=0x{:04X}",
-        server_info.product_name, accepted_secmec
+        "Phase 1 complete: server={}, secmec=0x{:04X}, sectkn={}",
+        server_info.product_name,
+        accepted_secmec,
+        server_sectkn.as_ref().map_or(0, Vec::len)
     );
 
-    // Phase 2: ACCSEC(cleartext) + SECCHK + ACCRDB (matching pydrda flow)
-    let accsec_cleartext = db2_proto::commands::accsec::build_accsec_usridpwd(&config.database);
-    let secchk_data = db2_proto::commands::secchk::build_secchk_usridpwd(
-        &config.database,
-        &config.user,
-        &config.password,
-    );
+    // Phase 2: SECCHK + ACCRDB. If the server negotiated a mechanism other
+    // than the one we initially requested, send a matching ACCSEC first.
+    let renegotiate_security = accepted_secmec != codepoints::SECMEC_EUSRIDPWD;
+    let secchk_data = build_secchk_for_mechanism(
+        accepted_secmec,
+        server_sectkn.as_deref(),
+        &client_private,
+        config,
+    )?;
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
 
     let mut writer = DssWriter::new(1);
-    writer.write_request(&accsec_cleartext, true); // chained
-    writer.set_correlation_id(2);
+    if renegotiate_security {
+        let accsec_data =
+            db2_proto::commands::accsec::build_accsec(accepted_secmec, &config.database);
+        writer.write_request(&accsec_data, true); // chained
+        writer.set_correlation_id(2);
+    }
     writer.write_request(&secchk_data, true); // chained
-    writer.set_correlation_id(3);
+    writer.next_correlation_id();
     writer.write_request(&accrdb_data, false); // not chained
 
     let send_buf = writer.finish();
     transport.write_bytes(&send_buf).await?;
-    debug!("Sent ACCSEC(cleartext) + SECCHK + ACCRDB");
+    debug!(
+        "Sent {}SECCHK + ACCRDB",
+        if renegotiate_security {
+            "ACCSEC + "
+        } else {
+            ""
+        }
+    );
 
-    // Read phase 2 responses (ACCSECRD + SECCHKRM + ACCRDBRM/SQLCARD)
+    // Read phase 2 responses: optional ACCSECRD, SECCHKRM, ACCRDBRM/SQLCARD.
     if recv_buf.len() < 6 {
         transport.read_at_least(&mut recv_buf, 6).await?;
     }
 
+    let min_success_frames = if renegotiate_security { 3 } else { 2 };
     let frames = loop {
         let mut reader = DssReader::new(recv_buf.to_vec());
         let frames = reader
             .read_all_frames()
             .map_err(|e| Error::Protocol(e.to_string()))?;
-        if frames.len() >= 3 {
+        if phase2_frames_complete(&frames, min_success_frames)? {
             let _ = reader.into_remaining();
             break frames;
         }
@@ -183,10 +199,12 @@ pub async fn authenticate(
     let mut saw_secchkrm = false;
     let mut found_accrdbrm = false;
     let mut access_error: Option<Error> = None;
+    let mut received_code_points = Vec::new();
 
     for frame in &frames {
         let (obj, _) =
             DdmObject::parse(&frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
+        received_code_points.push(obj.code_point);
         match obj.code_point {
             codepoints::ACCSECRD => {}
             codepoints::SECCHKRM => {
@@ -233,6 +251,27 @@ pub async fn authenticate(
                     "RDB not accessed or database not found".into(),
                 ));
             }
+            codepoints::PRCCNVRM => {
+                return Err(Error::Protocol(format!(
+                    "Server returned DRDA protocol error PRCCNVRM during authentication; received {}",
+                    format_code_points(&received_code_points)
+                )));
+            }
+            codepoints::SYNTAXRM | codepoints::CMDCHKRM | codepoints::OBJNSPRM => {
+                return Err(Error::Protocol(format!(
+                    "Server rejected an authentication command with {}; received {}",
+                    code_point_name(obj.code_point),
+                    format_code_points(&received_code_points)
+                )));
+            }
+            codepoints::SQLERRRM => {
+                let reply = db2_proto::replies::sqlerrrm::parse_sqlerrrm(&obj)
+                    .map_err(|e| Error::Protocol(e.to_string()))?;
+                access_error = Some(Error::Protocol(format!(
+                    "Server returned SQLERRRM during authentication: severity={}",
+                    reply.severity_code
+                )));
+            }
             other => {
                 debug!(
                     "Received unexpected code point 0x{:04X} during ACCRDB",
@@ -243,9 +282,10 @@ pub async fn authenticate(
     }
 
     if !saw_secchkrm {
-        return Err(Error::Protocol(
-            "No SECCHKRM received during authentication".into(),
-        ));
+        return Err(Error::Protocol(format!(
+            "No SECCHKRM received during authentication; received {}",
+            format_code_points(&received_code_points)
+        )));
     }
     if let Some(err) = access_error {
         return Err(err);
@@ -265,6 +305,96 @@ pub async fn authenticate(
     Ok((server_info, 1))
 }
 
+fn build_secchk_for_mechanism(
+    security_mechanism: u16,
+    server_sectkn: Option<&[u8]>,
+    client_private: &[u8],
+    config: &Config,
+) -> Result<Vec<u8>, Error> {
+    match security_mechanism {
+        codepoints::SECMEC_EUSRIDPWD => {
+            let server_sectkn = server_sectkn.ok_or_else(|| {
+                Error::Protocol(
+                    "ACCSECRD selected encrypted authentication but did not include SECTKN".into(),
+                )
+            })?;
+            db2_proto::commands::secchk::build_secchk_eusridpwd(
+                &config.database,
+                &config.user,
+                &config.password,
+                server_sectkn,
+                client_private,
+            )
+            .map_err(Error::from)
+        }
+        codepoints::SECMEC_USRIDPWD => Ok(db2_proto::commands::secchk::build_secchk_usridpwd(
+            &config.database,
+            &config.user,
+            &config.password,
+        )),
+        codepoints::SECMEC_USRIDONL => {
+            let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::SECCHK);
+            ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_USRIDONL);
+            ddm.add_code_point(
+                codepoints::RDBNAM,
+                &db2_proto::codepage::pad_rdbnam(&config.database),
+            );
+            ddm.add_code_point(
+                codepoints::USRID,
+                &db2_proto::codepage::utf8_to_ebcdic037(&config.user),
+            );
+            Ok(ddm.build())
+        }
+        other => Err(Error::Auth(format!(
+            "Server selected unsupported DRDA security mechanism 0x{other:04X}"
+        ))),
+    }
+}
+
+fn phase2_frames_complete(frames: &[DssFrame], min_success_frames: usize) -> Result<bool, Error> {
+    if frames.len() >= min_success_frames {
+        return Ok(true);
+    }
+
+    let mut saw_secchkrm_success = false;
+    let mut saw_access_reply = false;
+
+    for frame in frames {
+        let (obj, _) =
+            DdmObject::parse(&frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
+        match obj.code_point {
+            codepoints::SECCHKRM => {
+                let reply = db2_proto::replies::secchkrm::parse_secchkrm(&obj)
+                    .map_err(|e| Error::Protocol(e.to_string()))?;
+                if !reply.is_success() {
+                    return Ok(true);
+                }
+                saw_secchkrm_success = true;
+            }
+            codepoints::ACCRDBRM => saw_access_reply = true,
+            codepoints::RDBNACRM
+            | codepoints::PRCCNVRM
+            | codepoints::SYNTAXRM
+            | codepoints::CMDCHKRM
+            | codepoints::OBJNSPRM
+            | codepoints::SQLERRRM => return Ok(true),
+            codepoints::SQLCARD => {
+                let card = db2_proto::replies::sqlcard::parse_sqlcard(&obj)
+                    .map_err(|e| Error::Protocol(e.to_string()))?;
+                if card.is_error() {
+                    return Ok(true);
+                }
+                if card.is_success() {
+                    saw_access_reply = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(saw_secchkrm_success && saw_access_reply)
+}
+
 fn format_security_check_code(code: Option<u8>) -> String {
     match code {
         Some(0x0F) => "0x0F (invalid password)".into(),
@@ -272,5 +402,33 @@ fn format_security_check_code(code: Option<u8>) -> String {
         Some(0x14) => "0x14 (security mechanism not supported)".into(),
         Some(other) => format!("0x{other:02X}"),
         None => "unknown".into(),
+    }
+}
+
+fn format_code_points(code_points: &[u16]) -> String {
+    if code_points.is_empty() {
+        return "none".into();
+    }
+
+    code_points
+        .iter()
+        .map(|cp| format!("{}(0x{cp:04X})", code_point_name(*cp)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn code_point_name(code_point: u16) -> &'static str {
+    match code_point {
+        codepoints::ACCSECRD => "ACCSECRD",
+        codepoints::SECCHKRM => "SECCHKRM",
+        codepoints::ACCRDBRM => "ACCRDBRM",
+        codepoints::SQLCARD => "SQLCARD",
+        codepoints::RDBNACRM => "RDBNACRM",
+        codepoints::PRCCNVRM => "PRCCNVRM",
+        codepoints::SYNTAXRM => "SYNTAXRM",
+        codepoints::CMDCHKRM => "CMDCHKRM",
+        codepoints::OBJNSPRM => "OBJNSPRM",
+        codepoints::SQLERRRM => "SQLERRRM",
+        _ => "UNKNOWN",
     }
 }
