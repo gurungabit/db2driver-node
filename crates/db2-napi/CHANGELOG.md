@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.4](https://github.com/gurungabit/db2-node/compare/v0.1.3...v0.1.4) (2026-04-30)
+
+
+### Bug Fixes
+
+* publish zOS auth fixes through npm package ([025e6c9](https://github.com/gurungabit/db2-node/commit/025e6c99400a6892d1bac72f96c92adfb3fa753c))
+
 ## [0.1.3](https://github.com/gurungabit/db2-node/compare/v0.1.2...v0.1.3) (2026-04-30)
 
 ### Bug Fixes
