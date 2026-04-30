@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/gurungabit/db2-node/compare/v0.1.2...v0.1.3) (2026-04-30)
+
+
+### Bug Fixes
+
+* release DB2 zOS authentication support ([2df2565](https://github.com/gurungabit/db2-node/commit/2df256539796156f84aeb046d574b7dfaba98011))
+
 ## [0.1.2](https://github.com/gurungabit/db2-node/compare/v0.1.1...v0.1.2) (2026-04-07)
 
 
