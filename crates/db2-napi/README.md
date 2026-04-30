@@ -12,6 +12,14 @@ Pure Rust DB2 driver for Node.js using the DRDA wire protocol directly. No IBM C
 npm install @gurungabit/db2-node
 ```
 
+You can also install the npm-packed artifact from a GitHub release:
+
+```bash
+npm install https://github.com/gurungabit/db2-node/releases/download/v0.1.3/gurungabit-db2-node-0.1.3.tgz
+```
+
+Replace `0.1.3` with the release version you want.
+
 Prebuilt native binaries ship for supported platforms — no Rust toolchain needed:
 
 - macOS: `x64`, `arm64`
@@ -190,4 +198,4 @@ try {
 
 ## Releases
 
-Tag pushes matching `v*` trigger the release workflow in `.github/workflows/release.yml`, which builds native binaries for all targets and publishes to npm.
+Tag pushes matching `v*` trigger the release workflow in `.github/workflows/release.yml`, which builds native binaries for all targets, publishes to npm, and attaches the npm-packed `.tgz` to the GitHub release for direct GitHub installs.

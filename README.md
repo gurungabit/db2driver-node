@@ -21,6 +21,14 @@ This repository contains the driver, the protocol implementation, the Node.js bi
 npm install @gurungabit/db2-node
 ```
 
+Install from a GitHub release tarball:
+
+```bash
+npm install https://github.com/gurungabit/db2-node/releases/download/v0.1.3/gurungabit-db2-node-0.1.3.tgz
+```
+
+Replace `0.1.3` with the release version you want.
+
 ```ts
 import { Client } from "@gurungabit/db2-node";
 
@@ -159,7 +167,7 @@ The deployed docs site lives at `https://gurungabit.github.io/db2-node/`.
 - `.github/workflows/release-please.yml` opens and updates a release PR from `main`
 - Merging that release PR creates the next `v*` tag
 - Tag pushes matching `v*` trigger `.github/workflows/release.yml`
-- The release workflow builds prebuilt binaries, smoke-tests module loading, and publishes npm artifacts
+- The release workflow builds prebuilt binaries, smoke-tests module loading, publishes npm artifacts, and attaches the npm-packed `.tgz` to the GitHub release
 
 ### Release Automation Notes
 
