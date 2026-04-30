@@ -37,10 +37,8 @@ pub fn parse_secchkrm(obj: &DdmObject) -> Result<SecChkReply> {
             SVRCOD => {
                 severity_code = param.as_u16().unwrap_or(0);
             }
-            SECCHKCD => {
-                if !param.data.is_empty() {
-                    security_check_code = Some(param.data[0]);
-                }
+            SECCHKCD if !param.data.is_empty() => {
+                security_check_code = Some(param.data[0]);
             }
             _ => {}
         }
