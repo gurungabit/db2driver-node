@@ -11,18 +11,20 @@ pub fn config_from_js(
     ssl: Option<bool>,
     reject_unauthorized: Option<bool>,
     ca_cert: Option<String>,
+    security_mechanism: Option<String>,
     connect_timeout: Option<u32>,
     query_timeout: Option<u32>,
     frame_drain_timeout: Option<u32>,
     current_schema: Option<String>,
     fetch_size: Option<u32>,
-) -> db2_client::Config {
+) -> napi::Result<db2_client::Config> {
     let mut config = db2_client::Config {
         host: host.to_string(),
         port: port.unwrap_or(50000) as u16,
         database: database.to_string(),
         user: user.to_string(),
         password: password.to_string(),
+        security_mechanism: parse_security_mechanism(security_mechanism)?,
         ..db2_client::Config::default()
     };
     let use_ssl = ssl.unwrap_or(false);
@@ -47,7 +49,40 @@ pub fn config_from_js(
     if let Some(fs) = fetch_size {
         config.fetch_size = fs;
     }
-    config
+    Ok(config)
+}
+
+fn parse_security_mechanism(value: Option<String>) -> napi::Result<db2_client::SecurityMechanism> {
+    let Some(value) = value else {
+        return Ok(db2_client::SecurityMechanism::EncryptedUserPassword);
+    };
+
+    let normalized: String = value
+        .trim()
+        .chars()
+        .filter(|c| *c != '_' && *c != '-' && !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+
+    match normalized.as_str() {
+        ""
+        | "9"
+        | "secmec9"
+        | "encrypted"
+        | "eusridpwd"
+        | "encrypteduserpassword"
+        | "encrypteduseridpassword" => Ok(db2_client::SecurityMechanism::EncryptedUserPassword),
+        "3" | "secmec3" | "clear" | "usridpwd" | "userpassword" | "useridpassword" => {
+            Ok(db2_client::SecurityMechanism::UserPassword)
+        }
+        "4" | "secmec4" | "usridonly" | "useronly" | "useridonly" => {
+            Ok(db2_client::SecurityMechanism::UserOnly)
+        }
+        _ => Err(napi::Error::from_reason(format!(
+            "Unsupported securityMechanism '{}'. Use 'encrypted', 'userPassword', or 'userOnly'.",
+            value
+        ))),
+    }
 }
 
 /// Convert a db2_client::QueryResult into our JS-facing QueryResult struct.
@@ -167,4 +202,22 @@ pub fn client_error_to_napi(err: db2_client::Error) -> napi::Error {
         other => other.to_string(),
     };
     napi::Error::from_reason(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_mechanism_parser_accepts_public_aliases() {
+        assert_eq!(
+            parse_security_mechanism(Some("encrypted".into())).unwrap(),
+            db2_client::SecurityMechanism::EncryptedUserPassword
+        );
+        assert_eq!(
+            parse_security_mechanism(Some("SECMEC-3".into())).unwrap(),
+            db2_client::SecurityMechanism::UserPassword
+        );
+        assert!(parse_security_mechanism(Some("unsupported".into())).is_err());
+    }
 }

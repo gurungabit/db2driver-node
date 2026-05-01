@@ -65,6 +65,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `database` | `string` | — | Database name |
 | `user` | `string` | — | Username |
 | `password` | `string` | — | Password |
+| `securityMechanism` | `string` | `'encrypted'` | DRDA authentication mechanism: `'encrypted'` (SECMEC 9), `'userPassword'` (SECMEC 3), or `'userOnly'` (SECMEC 4) |
 | `ssl` | `boolean` | `false` | Enable TLS/SSL |
 | `rejectUnauthorized` | `boolean` | `true` | Verify server certificate (requires `ssl: true`) |
 | `caCert` | `string` | — | Path to CA certificate PEM file |
@@ -175,6 +176,25 @@ const client = new Client({
 ```
 
 TLS uses `rustls` (pure Rust, no OpenSSL). System trust store certificates are loaded automatically when `rejectUnauthorized` is `true`. The `connectTimeout` covers the full TCP + TLS handshake.
+
+## DB2 z/OS Authentication
+
+The default `securityMechanism` is `'encrypted'`, which sends DRDA encrypted user ID and password credentials (`SECMEC 9`). Some DB2 z/OS DDF environments require user ID and password authentication (`SECMEC 3`) over an already encrypted TLS connection:
+
+```ts
+const client = new Client({
+  host: 'zos.example.com',
+  port: 448,
+  database: 'DSNLOC',
+  user: 'APPUSER',
+  password: 'secret',
+  ssl: true,
+  rejectUnauthorized: true,
+  securityMechanism: 'userPassword',
+})
+```
+
+Use `securityMechanism: 'userPassword'` only with TLS in production, because DRDA itself will not encrypt the credentials for that mechanism. RACF user IDs are commonly uppercase and limited to 8 characters; pass the exact user ID form accepted by DDF. A `SECCHKCD 0x13` failure means DB2 rejected the user ID or password after the security check.
 
 ## Server Info
 

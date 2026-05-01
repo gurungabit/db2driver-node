@@ -1,7 +1,7 @@
 use bytes::BytesMut;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
-use crate::config::Config;
+use crate::config::{Config, SecurityMechanism};
 use crate::error::Error;
 use crate::transport::Transport;
 use db2_proto::codepoints;
@@ -30,24 +30,27 @@ pub async fn authenticate(
 ) -> Result<(ServerInfo, u16), Error> {
     debug!("Starting DRDA authentication handshake");
 
-    // Phase 1: EXCSAT + ACCSEC(encrypted) — negotiate security with DH key exchange
+    // Phase 1: EXCSAT + ACCSEC — negotiate the requested security mechanism.
     let excsat_data = db2_proto::commands::excsat::build_excsat_default();
+    let requested_secmec = security_mechanism_code(config.security_mechanism);
+    if matches!(
+        config.security_mechanism,
+        SecurityMechanism::UserPassword | SecurityMechanism::UserOnly
+    ) && !config.ssl
+    {
+        warn!(
+            "DRDA security mechanism 0x{:04X} sends credentials without DRDA encryption; enable TLS for production use",
+            requested_secmec
+        );
+    }
 
-    // Generate DH key pair for encrypted auth
+    // Generate a DH key pair for encrypted auth and for any server-requested
+    // renegotiation back to encrypted credentials.
     let client_private = db2_proto::secmec9::generate_private_key();
     let client_public = db2_proto::secmec9::calculate_public_key(&client_private);
 
-    // Build ACCSEC with encrypted mechanism (0x0009) and our public key as SECTKN
-    let accsec_data = {
-        let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::ACCSEC);
-        ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_EUSRIDPWD);
-        ddm.add_code_point(
-            codepoints::RDBNAM,
-            &db2_proto::codepage::pad_rdbnam(&config.database),
-        );
-        ddm.add_code_point(codepoints::SECTKN, &client_public);
-        ddm.build()
-    };
+    let accsec_data =
+        build_accsec_for_mechanism(requested_secmec, &config.database, &client_public)?;
 
     let mut writer = DssWriter::new(1);
     writer.write_request(&excsat_data, true); // chained
@@ -56,7 +59,7 @@ pub async fn authenticate(
 
     let send_buf = writer.finish();
     transport.write_bytes(&send_buf).await?;
-    debug!("Sent EXCSAT + ACCSEC(encrypted)");
+    debug!("Sent EXCSAT + ACCSEC(secmec=0x{requested_secmec:04X})");
 
     // Read phase 1 responses
     let mut recv_buf = BytesMut::with_capacity(4096);
@@ -131,7 +134,7 @@ pub async fn authenticate(
 
     // Phase 2: SECCHK + ACCRDB. If the server negotiated a mechanism other
     // than the one we initially requested, send a matching ACCSEC first.
-    let renegotiate_security = accepted_secmec != codepoints::SECMEC_EUSRIDPWD;
+    let renegotiate_security = accepted_secmec != requested_secmec;
     let secchk_data = build_secchk_for_mechanism(
         accepted_secmec,
         server_sectkn.as_deref(),
@@ -143,7 +146,7 @@ pub async fn authenticate(
     let mut writer = DssWriter::new(1);
     if renegotiate_security {
         let accsec_data =
-            db2_proto::commands::accsec::build_accsec(accepted_secmec, &config.database);
+            build_accsec_for_mechanism(accepted_secmec, &config.database, &client_public)?;
         writer.write_request(&accsec_data, true); // chained
         writer.set_correlation_id(2);
     }
@@ -314,6 +317,37 @@ pub async fn authenticate(
     Ok((server_info, 1))
 }
 
+fn security_mechanism_code(security_mechanism: SecurityMechanism) -> u16 {
+    match security_mechanism {
+        SecurityMechanism::EncryptedUserPassword => codepoints::SECMEC_EUSRIDPWD,
+        SecurityMechanism::UserPassword => codepoints::SECMEC_USRIDPWD,
+        SecurityMechanism::UserOnly => codepoints::SECMEC_USRIDONL,
+    }
+}
+
+fn build_accsec_for_mechanism(
+    security_mechanism: u16,
+    rdbnam: &str,
+    client_public: &[u8],
+) -> Result<Vec<u8>, Error> {
+    match security_mechanism {
+        codepoints::SECMEC_EUSRIDPWD
+        | codepoints::SECMEC_USRIDPWD
+        | codepoints::SECMEC_USRIDONL => {
+            let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::ACCSEC);
+            ddm.add_u16(codepoints::SECMEC, security_mechanism);
+            ddm.add_code_point(codepoints::RDBNAM, &db2_proto::codepage::pad_rdbnam(rdbnam));
+            if security_mechanism == codepoints::SECMEC_EUSRIDPWD {
+                ddm.add_code_point(codepoints::SECTKN, client_public);
+            }
+            Ok(ddm.build())
+        }
+        other => Err(Error::Auth(format!(
+            "Unsupported DRDA security mechanism 0x{other:04X}"
+        ))),
+    }
+}
+
 fn build_secchk_for_mechanism(
     security_mechanism: u16,
     server_sectkn: Option<&[u8]>,
@@ -405,9 +439,17 @@ fn phase2_frames_complete(frames: &[DssFrame], min_success_frames: usize) -> Res
 
 fn format_security_check_code(code: Option<u8>) -> String {
     match code {
-        Some(0x0F) => "0x0F (invalid password)".into(),
-        Some(0x10) => "0x10 (missing or invalid user id)".into(),
-        Some(0x14) => "0x14 (security mechanism not supported)".into(),
+        Some(0x00) => "0x00 (success)".into(),
+        Some(0x01) => "0x01 (security mechanism not supported)".into(),
+        Some(0x0A) => "0x0A (security service non-retryable error)".into(),
+        Some(0x0B) => "0x0B (security token missing or invalid)".into(),
+        Some(0x0E) => "0x0E (password expired)".into(),
+        Some(0x0F) => "0x0F (user id or password invalid)".into(),
+        Some(0x10) => "0x10 (password missing)".into(),
+        Some(0x12) => "0x12 (user id missing)".into(),
+        Some(0x13) => "0x13 (user id or password invalid)".into(),
+        Some(0x14) => "0x14 (user id revoked)".into(),
+        Some(0x15) => "0x15 (new password invalid)".into(),
         Some(other) => format!("0x{other:02X}"),
         None => "unknown".into(),
     }
@@ -517,5 +559,36 @@ mod tests {
             format_reply_detail(&obj),
             "severity=8, parameter=SECTKN(0x11DC)"
         );
+    }
+
+    #[test]
+    fn security_check_code_names_include_zos_auth_failures() {
+        assert_eq!(
+            format_security_check_code(Some(0x13)),
+            "0x13 (user id or password invalid)"
+        );
+        assert_eq!(
+            format_security_check_code(Some(0x14)),
+            "0x14 (user id revoked)"
+        );
+        assert_eq!(
+            format_security_check_code(Some(0x0B)),
+            "0x0B (security token missing or invalid)"
+        );
+    }
+
+    #[test]
+    fn accsec_includes_sectkn_only_for_encrypted_auth() {
+        let public_key = [0xAA; 32];
+        let encrypted =
+            build_accsec_for_mechanism(codepoints::SECMEC_EUSRIDPWD, "DSNDB04", &public_key)
+                .unwrap();
+        let (encrypted_obj, _) = DdmObject::parse(&encrypted).unwrap();
+        assert!(encrypted_obj.find_param(codepoints::SECTKN).is_some());
+
+        let clear = build_accsec_for_mechanism(codepoints::SECMEC_USRIDPWD, "DSNDB04", &public_key)
+            .unwrap();
+        let (clear_obj, _) = DdmObject::parse(&clear).unwrap();
+        assert!(clear_obj.find_param(codepoints::SECTKN).is_none());
     }
 }

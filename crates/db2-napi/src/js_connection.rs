@@ -15,6 +15,7 @@ pub struct JsConnectionConfig {
     pub ssl: Option<bool>,
     pub reject_unauthorized: Option<bool>,
     pub ca_cert: Option<String>,
+    pub security_mechanism: Option<String>,
     pub connect_timeout: Option<u32>,
     pub query_timeout: Option<u32>,
     pub frame_drain_timeout: Option<u32>,
@@ -65,12 +66,13 @@ impl JsClient {
             config.ssl,
             config.reject_unauthorized,
             config.ca_cert,
+            config.security_mechanism,
             config.connect_timeout,
             config.query_timeout,
             config.frame_drain_timeout,
             config.current_schema,
             config.fetch_size,
-        );
+        )?;
         Ok(JsClient {
             inner: Arc::new(Mutex::new(None)),
             config: client_config,

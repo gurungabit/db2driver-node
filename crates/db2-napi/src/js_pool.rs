@@ -15,6 +15,7 @@ pub struct JsPoolConfig {
     pub ssl: Option<bool>,
     pub reject_unauthorized: Option<bool>,
     pub ca_cert: Option<String>,
+    pub security_mechanism: Option<String>,
     pub connect_timeout: Option<u32>,
     pub query_timeout: Option<u32>,
     pub frame_drain_timeout: Option<u32>,
@@ -45,12 +46,13 @@ impl JsPool {
             config.ssl,
             config.reject_unauthorized,
             config.ca_cert,
+            config.security_mechanism,
             config.connect_timeout,
             config.query_timeout,
             config.frame_drain_timeout,
             config.current_schema.clone(),
             config.fetch_size,
-        );
+        )?;
 
         let pool_config = db2_client::PoolConfig {
             connection: client_config.clone(),

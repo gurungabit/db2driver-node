@@ -8,6 +8,7 @@ pub struct Config {
     pub database: String,
     pub user: String,
     pub password: String,
+    pub security_mechanism: SecurityMechanism,
     pub ssl: bool,
     pub ssl_config: Option<SslConfig>,
     pub connect_timeout: Duration,
@@ -15,6 +16,17 @@ pub struct Config {
     pub frame_drain_timeout: Duration,
     pub fetch_size: u32,
     pub current_schema: Option<String>,
+}
+
+/// DRDA security mechanism to request during authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityMechanism {
+    /// Encrypted user ID and password (DRDA SECMEC 9).
+    EncryptedUserPassword,
+    /// User ID and password (DRDA SECMEC 3).
+    UserPassword,
+    /// User ID only (DRDA SECMEC 4).
+    UserOnly,
 }
 
 /// TLS/SSL configuration options.
@@ -45,6 +57,7 @@ impl Default for Config {
             database: String::new(),
             user: String::new(),
             password: String::new(),
+            security_mechanism: SecurityMechanism::EncryptedUserPassword,
             ssl: false,
             ssl_config: None,
             connect_timeout: Duration::from_secs(30),

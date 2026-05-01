@@ -12,6 +12,7 @@ export interface JsConnectionConfig {
   ssl?: boolean
   rejectUnauthorized?: boolean
   caCert?: string
+  securityMechanism?: string
   connectTimeout?: number
   queryTimeout?: number
   frameDrainTimeout?: number
@@ -43,6 +44,7 @@ export interface JsPoolConfig {
   ssl?: boolean
   rejectUnauthorized?: boolean
   caCert?: string
+  securityMechanism?: string
   connectTimeout?: number
   queryTimeout?: number
   frameDrainTimeout?: number

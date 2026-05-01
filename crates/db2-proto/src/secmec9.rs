@@ -816,6 +816,30 @@ mod tests {
     }
 
     #[test]
+    fn test_dh_public_key_known_vectors() {
+        let cases = [
+            (
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "4690fa1f7b9e1d4442c86c9114603fdecf071edcec5f626e21e256aed9ea34e4",
+            ),
+            (
+                "0000000000000000000000000000000000000000000000000000000000000002",
+                "2be2e3ebeed26cdf9f0543b8b471390a3ec4a4d5fe3265e3333ce57365dde634",
+            ),
+            (
+                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                "144eabbd93f2b7a1b961cd058e390dd9883c9bc4e4b669685603e79bf0fe3a78",
+            ),
+        ];
+
+        for (private_hex, public_hex) in cases {
+            let private_key = hex_to_bytes(private_hex);
+            let expected_public = hex_to_bytes(public_hex);
+            assert_eq!(calculate_public_key(&private_key), expected_public);
+        }
+    }
+
+    #[test]
     fn test_des_known_vectors() {
         // Test vector verified against OpenSSL:
         // key = 0133457799BBCDFF, plaintext = 0123456789ABCDEF
@@ -843,6 +867,14 @@ mod tests {
         let subkeys3 = des_key_schedule(&key3);
         let result3 = des_encrypt_block(&pt3, &subkeys3);
         assert_eq!(result3, expected3, "DES test 3 (FIPS appendix B) failed");
+    }
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0);
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
