@@ -113,7 +113,10 @@ pub fn pad_ebcdic(name: &str, length: usize) -> Vec<u8> {
 
 /// Convenience wrapper: convert a database name to EBCDIC and pad to 18 bytes.
 pub fn pad_rdbnam(db_name: &str) -> Vec<u8> {
-    pad_ebcdic(db_name, 18)
+    // Db2 for z/OS rejects RDBNAM with VALNSPRM when bytes 17-18 are non-blank.
+    let mut rdbnam = pad_ebcdic(db_name, 16);
+    rdbnam.resize(18, 0x40);
+    rdbnam
 }
 
 /// Alias for utf8_to_ebcdic037 (used by db2-client).
@@ -151,5 +154,14 @@ mod tests {
         // First 6 bytes should be EBCDIC for "TESTDB"
         let back = ebcdic037_to_utf8(&padded);
         assert_eq!(back, "TESTDB            ");
+    }
+
+    #[test]
+    fn test_pad_rdbnam_keeps_zos_reserved_bytes_blank() {
+        let padded = pad_rdbnam("ABCDEFGHIJKLMNOPQR");
+        assert_eq!(padded.len(), 18);
+
+        let back = ebcdic037_to_utf8(&padded);
+        assert_eq!(back, "ABCDEFGHIJKLMNOP  ");
     }
 }

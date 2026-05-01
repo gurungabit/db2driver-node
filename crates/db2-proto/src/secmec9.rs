@@ -1226,6 +1226,27 @@ mod tests {
     }
 
     #[test]
+    fn test_secmec7_aes_matches_ibm_jcc_vector() {
+        let session_key = hex_to_bytes(
+            "73d52e0f878d6e6c5361f9f6ef31d8796161cef670be34d9345bffce7cf5ad81\
+             608d642b93b26eca6b86787cf156dc6d011b04ab17f803545f3fbd655e4470cb",
+        );
+        let server_sectkn = hex_to_bytes(
+            "632c09324e3b451c622865a8a1897070f26cc3d3920560ae862a6d9a733ee1f1\
+             7ec53d148202264972b41632cf4a05165d26437182236438289923c557050eae",
+        );
+        let encrypted = encrypt_password_with_userid_iv_bytes_with_algorithm(
+            &session_key,
+            &server_sectkn,
+            b"ignored",
+            b"password",
+            EncryptionAlgorithm::Aes,
+        );
+
+        assert_eq!(encrypted, hex_to_bytes("b7e8bb87c141d97d93a1f7e60c61c50c"));
+    }
+
+    #[test]
     fn test_generate_private_key_in_range() {
         let key = generate_private_key();
         assert_eq!(key.len(), 32);

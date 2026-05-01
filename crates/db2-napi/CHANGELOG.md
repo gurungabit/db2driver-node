@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.8](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.8) (2026-05-01)
+
+### Bug Fixes
+
+- keep z/OS RDBNAM reserved bytes blank and lock SECMEC 7 AES to an IBM JCC test vector
+
 ## [0.1.7-zos.7](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.7) (2026-05-01)
 
 ### Bug Fixes
