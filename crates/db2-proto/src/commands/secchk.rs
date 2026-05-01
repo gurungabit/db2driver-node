@@ -174,14 +174,20 @@ pub fn build_secchk_eusridpwd_with_algorithm_and_encoding(
     credential_encoding: CredentialEncoding,
     encryption_algorithm: EncryptionAlgorithm,
 ) -> Result<Vec<u8>> {
-    if server_sectkn.len() != 32 {
+    let expected_sectkn_len = sectkn_len_for_algorithm(encryption_algorithm);
+    if !valid_sectkn_len(server_sectkn, expected_sectkn_len) {
         return Err(ProtoError::Other(format!(
-            "ACCSECRD returned an invalid SECTKN for encrypted authentication: expected 32 bytes, got {}",
+            "ACCSECRD returned an invalid SECTKN for encrypted authentication: expected {} bytes, got {}",
+            expected_sectkn_len,
             server_sectkn.len()
         )));
     }
 
-    let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
+    let session_key = crate::secmec9::calculate_session_key_with_algorithm(
+        server_sectkn,
+        client_private,
+        encryption_algorithm,
+    );
     let encoded_user_id = credential_encoding.encode(user_id);
     let encoded_password = credential_encoding.encode(password);
     let encrypted_user_id = crate::secmec9::encrypt_userid_bytes_with_algorithm(
@@ -277,14 +283,20 @@ pub fn build_secchk_usencpwd_with_algorithm_and_encodings(
     credential_encodings: EncryptedPasswordCredentialEncodings,
     encryption_algorithm: EncryptionAlgorithm,
 ) -> Result<Vec<u8>> {
-    if server_sectkn.len() != 32 {
+    let expected_sectkn_len = sectkn_len_for_algorithm(encryption_algorithm);
+    if !valid_sectkn_len(server_sectkn, expected_sectkn_len) {
         return Err(ProtoError::Other(format!(
-            "ACCSECRD returned an invalid SECTKN for encrypted password authentication: expected 32 bytes, got {}",
+            "ACCSECRD returned an invalid SECTKN for encrypted password authentication: expected {} bytes, got {}",
+            expected_sectkn_len,
             server_sectkn.len()
         )));
     }
 
-    let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
+    let session_key = crate::secmec9::calculate_session_key_with_algorithm(
+        server_sectkn,
+        client_private,
+        encryption_algorithm,
+    );
     let encoded_user_id = credential_encodings.user_id.encode(user_id);
     let encoded_password = credential_encodings.password.encode(password);
     let password_token = credential_encodings.password_token.encode(user_id);
@@ -300,6 +312,18 @@ pub fn build_secchk_usencpwd_with_algorithm_and_encodings(
     ddm.add_code_point(USRID, &encoded_user_id);
     ddm.add_code_point(SECTKN, &encrypted_password);
     Ok(ddm.build())
+}
+
+fn sectkn_len_for_algorithm(encryption_algorithm: EncryptionAlgorithm) -> usize {
+    match encryption_algorithm {
+        EncryptionAlgorithm::Des => 32,
+        EncryptionAlgorithm::Aes => 64,
+    }
+}
+
+fn valid_sectkn_len(server_sectkn: &[u8], expected_len: usize) -> bool {
+    server_sectkn.len() == expected_len
+        || (server_sectkn.len() == expected_len + 1 && server_sectkn[0] == 0)
 }
 
 #[cfg(test)]

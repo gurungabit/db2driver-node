@@ -9,6 +9,8 @@
 use crate::codepage::utf8_to_ebcdic037;
 use aes::Aes256;
 use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use num_bigint::BigUint;
+use sha1::{Digest, Sha1};
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 
@@ -37,14 +39,32 @@ pub const DH_BASE: [u8; 32] = [
     0xCF, 0x07, 0x1E, 0xDC, 0xEC, 0x5F, 0x62, 0x6E, 0x21, 0xE2, 0x56, 0xAE, 0xD9, 0xEA, 0x34, 0xE4,
 ];
 
+/// DH prime used by IBM JCC for DRDA AES encrypted authentication.
+pub const DH_PRIME_AES: [u8; 64] = [
+    0xF2, 0x4F, 0x63, 0x15, 0x0E, 0xAA, 0x97, 0xCC, 0xE7, 0x8F, 0x57, 0x10, 0xC4, 0x5F, 0xAF, 0xBE,
+    0xB7, 0x1C, 0xF6, 0xA8, 0x72, 0x4F, 0x63, 0x14, 0x0E, 0xAA, 0x97, 0xCC, 0xE7, 0x8F, 0x57, 0x10,
+    0xC4, 0x5F, 0xAF, 0xBE, 0xB7, 0x1C, 0xF6, 0xA8, 0x72, 0x4F, 0x63, 0x13, 0x08, 0xE3, 0x2B, 0x26,
+    0xEA, 0x15, 0x94, 0x88, 0x9C, 0xBB, 0xFC, 0x91, 0xF6, 0xDF, 0x75, 0x24, 0x35, 0x2E, 0xF9, 0x79,
+];
+
+/// DH base used by IBM JCC for DRDA AES encrypted authentication.
+pub const DH_BASE_AES: [u8; 64] = [
+    0xE8, 0xCE, 0x9E, 0x08, 0x44, 0xC6, 0x7A, 0x00, 0x9F, 0xB7, 0x84, 0x3C, 0xD9, 0x45, 0xA0, 0x58,
+    0x93, 0x5D, 0xA5, 0x1B, 0x02, 0x8A, 0x49, 0xE5, 0xA9, 0x1F, 0x83, 0x1B, 0x78, 0x36, 0x44, 0x91,
+    0xCD, 0x0E, 0x0A, 0x8F, 0x72, 0x34, 0x5D, 0xF8, 0x07, 0x69, 0x54, 0x99, 0x26, 0xFD, 0x16, 0xEC,
+    0xD6, 0xF6, 0x85, 0x94, 0x81, 0x64, 0x7C, 0xA9, 0xEF, 0xB2, 0xBA, 0xAC, 0x7B, 0xC0, 0x9A, 0x92,
+];
+
 // ===========================================================================
 // 256-bit big-endian unsigned integer arithmetic
 // ===========================================================================
 
 /// A 256-bit unsigned integer stored as 32 bytes in big-endian order.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct U256([u8; 32]);
 
+#[cfg(test)]
 impl U256 {
     const ZERO: Self = Self([0u8; 32]);
     const ONE: Self = Self([
@@ -303,6 +323,21 @@ impl U256 {
 /// secure in the formal sense. For production use, consider reading from
 /// `/dev/urandom` or using a proper CSPRNG.
 pub fn generate_private_key() -> Vec<u8> {
+    generate_private_key_with_algorithm(EncryptionAlgorithm::Des)
+}
+
+/// Generate a private key for the selected DRDA encrypted credential algorithm.
+pub fn generate_private_key_with_algorithm(algorithm: EncryptionAlgorithm) -> Vec<u8> {
+    let (prime, len) = dh_parameters(algorithm);
+    let mut k =
+        BigUint::from_bytes_be(&generate_private_bytes(len)) % BigUint::from_bytes_be(prime);
+    if k == BigUint::from(0u8) {
+        k = BigUint::from(1u8);
+    }
+    fixed_len_bytes(&k, len)
+}
+
+fn generate_private_bytes(len: usize) -> Vec<u8> {
     // Gather entropy from various sources available without external crates.
     let mut seed: u64 = 0;
 
@@ -324,7 +359,7 @@ pub fn generate_private_key() -> Vec<u8> {
         .bytes()
         .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
 
-    // Generate 32 bytes using xoshiro256-like mixing
+    // Generate bytes using xoshiro256-like mixing.
     let mut state = [
         seed,
         seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(1),
@@ -332,8 +367,8 @@ pub fn generate_private_key() -> Vec<u8> {
         seed.wrapping_mul(0xbb67ae8584caa73b).wrapping_add(3),
     ];
 
-    let mut key = [0u8; 32];
-    for chunk_i in 0..4 {
+    let mut key = vec![0u8; len];
+    for chunk in key.chunks_mut(8) {
         // xoshiro256** step
         let result = state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = state[1] << 17;
@@ -345,47 +380,80 @@ pub fn generate_private_key() -> Vec<u8> {
         state[3] = state[3].rotate_left(45);
 
         let bytes = result.to_be_bytes();
-        key[chunk_i * 8..chunk_i * 8 + 8].copy_from_slice(&bytes);
+        let chunk_len = chunk.len();
+        chunk.copy_from_slice(&bytes[..chunk_len]);
     }
 
-    // Ensure key < prime by clearing top bits if needed and retrying reduction.
-    let prime = U256::from_bytes(&DH_PRIME);
-    let mut k = U256::from_bytes(&key);
-
-    // If k >= prime, reduce it.
-    if k.gte(&prime) {
-        k = k.modulo(&prime);
-    }
-    // Ensure it's not zero.
-    if k.is_zero() {
-        k = U256::ONE;
-    }
-
-    k.to_bytes().to_vec()
+    key
 }
 
 /// Calculate the DH public key: base^private mod prime.
 ///
 /// Returns a 32-byte big-endian result.
 pub fn calculate_public_key(private_key: &[u8]) -> Vec<u8> {
-    let base = U256::from_bytes(&DH_BASE);
-    let priv_key = U256::from_bytes(private_key);
-    let prime = U256::from_bytes(&DH_PRIME);
+    calculate_public_key_with_algorithm(private_key, EncryptionAlgorithm::Des)
+}
 
-    let result = base.powmod(&priv_key, &prime);
-    result.to_bytes().to_vec()
+/// Calculate the DH public key for the selected encrypted credential algorithm.
+pub fn calculate_public_key_with_algorithm(
+    private_key: &[u8],
+    algorithm: EncryptionAlgorithm,
+) -> Vec<u8> {
+    let (prime, len) = dh_parameters(algorithm);
+    let base = dh_base(algorithm);
+    let result = BigUint::from_bytes_be(base).modpow(
+        &BigUint::from_bytes_be(private_key),
+        &BigUint::from_bytes_be(prime),
+    );
+    fixed_len_bytes(&result, len)
 }
 
 /// Calculate the shared session key: server_public^client_private mod prime.
 ///
 /// Returns a 32-byte big-endian result.
 pub fn calculate_session_key(server_public: &[u8], client_private: &[u8]) -> Vec<u8> {
-    let srv_pub = U256::from_bytes(server_public);
-    let cli_priv = U256::from_bytes(client_private);
-    let prime = U256::from_bytes(&DH_PRIME);
+    calculate_session_key_with_algorithm(server_public, client_private, EncryptionAlgorithm::Des)
+}
 
-    let result = srv_pub.powmod(&cli_priv, &prime);
-    result.to_bytes().to_vec()
+/// Calculate the raw shared session secret for the selected encrypted credential algorithm.
+pub fn calculate_session_key_with_algorithm(
+    server_public: &[u8],
+    client_private: &[u8],
+    algorithm: EncryptionAlgorithm,
+) -> Vec<u8> {
+    let (prime, len) = dh_parameters(algorithm);
+    let result = BigUint::from_bytes_be(server_public).modpow(
+        &BigUint::from_bytes_be(client_private),
+        &BigUint::from_bytes_be(prime),
+    );
+    fixed_len_bytes(&result, len)
+}
+
+fn dh_parameters(algorithm: EncryptionAlgorithm) -> (&'static [u8], usize) {
+    match algorithm {
+        EncryptionAlgorithm::Des => (&DH_PRIME, DH_PRIME.len()),
+        EncryptionAlgorithm::Aes => (&DH_PRIME_AES, DH_PRIME_AES.len()),
+    }
+}
+
+fn dh_base(algorithm: EncryptionAlgorithm) -> &'static [u8] {
+    match algorithm {
+        EncryptionAlgorithm::Des => &DH_BASE,
+        EncryptionAlgorithm::Aes => &DH_BASE_AES,
+    }
+}
+
+fn fixed_len_bytes(value: &BigUint, len: usize) -> Vec<u8> {
+    let bytes = value.to_bytes_be();
+    if bytes.len() == len + 1 && bytes[0] == 0 {
+        bytes[1..].to_vec()
+    } else if bytes.len() < len {
+        let mut out = vec![0u8; len];
+        out[len - bytes.len()..].copy_from_slice(&bytes);
+        out
+    } else {
+        bytes
+    }
 }
 
 // ===========================================================================
@@ -755,7 +823,7 @@ pub fn encrypt_password_bytes_with_algorithm(
         }
         EncryptionAlgorithm::Aes => {
             let mut iv = [0u8; 16];
-            iv.copy_from_slice(&server_sectkn[8..24]);
+            iv.copy_from_slice(&server_sectkn[24..40]);
             aes_cbc_encrypt(session_key, &iv, password)
         }
     }
@@ -776,7 +844,7 @@ pub fn encrypt_userid_bytes_with_algorithm(
         }
         EncryptionAlgorithm::Aes => {
             let mut iv = [0u8; 16];
-            iv.copy_from_slice(&server_sectkn[8..24]);
+            iv.copy_from_slice(&server_sectkn[24..40]);
             aes_cbc_encrypt(session_key, &iv, userid)
         }
     }
@@ -804,10 +872,35 @@ pub fn encrypt_password_with_userid_iv_bytes_with_algorithm(
 }
 
 fn aes_cbc_encrypt(session_key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
-    let mut aes_key = [0u8; 32];
-    aes_key.copy_from_slice(&session_key[..32]);
+    let aes_key = derive_aes_key_from_dh_secret(session_key);
 
     Aes256CbcEnc::new(&aes_key.into(), iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plaintext)
+}
+
+fn derive_aes_key_from_dh_secret(session_key: &[u8]) -> [u8; 32] {
+    let mut normalized = [0u8; 64];
+    if session_key.len() == 65 && session_key[0] == 0 {
+        normalized.copy_from_slice(&session_key[1..65]);
+    } else if session_key.len() < 64 {
+        normalized[64 - session_key.len()..].copy_from_slice(session_key);
+    } else {
+        normalized.copy_from_slice(&session_key[..64]);
+    }
+
+    let mut digest = Sha1::new();
+    digest.update(&normalized[..32]);
+    let first = digest.finalize_reset();
+
+    digest.update(&normalized[32..64]);
+    let second = digest.finalize();
+
+    let mut aes_key = [0u8; 32];
+    aes_key[..12].copy_from_slice(&first[..12]);
+    for i in 0..8 {
+        aes_key[12 + i] = first[12 + i] ^ second[i];
+    }
+    aes_key[20..32].copy_from_slice(&second[8..20]);
+    aes_key
 }
 
 /// Encrypt a user ID for DRDA SECMEC 0x0009 authentication.
@@ -971,6 +1064,38 @@ mod tests {
     }
 
     #[test]
+    fn test_aes_dh_public_key_known_vector() {
+        let private_key = {
+            let mut key = vec![0u8; 64];
+            key[63] = 1;
+            key
+        };
+
+        assert_eq!(
+            calculate_public_key_with_algorithm(&private_key, EncryptionAlgorithm::Aes),
+            DH_BASE_AES.to_vec()
+        );
+    }
+
+    #[test]
+    fn test_aes_dh_key_exchange_consistency() {
+        let priv_a = generate_private_key_with_algorithm(EncryptionAlgorithm::Aes);
+        let priv_b = generate_private_key_with_algorithm(EncryptionAlgorithm::Aes);
+        let pub_a = calculate_public_key_with_algorithm(&priv_a, EncryptionAlgorithm::Aes);
+        let pub_b = calculate_public_key_with_algorithm(&priv_b, EncryptionAlgorithm::Aes);
+
+        let shared_a =
+            calculate_session_key_with_algorithm(&pub_b, &priv_a, EncryptionAlgorithm::Aes);
+        let shared_b =
+            calculate_session_key_with_algorithm(&pub_a, &priv_b, EncryptionAlgorithm::Aes);
+
+        assert_eq!(pub_a.len(), 64);
+        assert_eq!(pub_b.len(), 64);
+        assert_eq!(shared_a.len(), 64);
+        assert_eq!(shared_a, shared_b);
+    }
+
+    #[test]
     fn test_des_known_vectors() {
         // Test vector verified against OpenSSL:
         // key = 0133457799BBCDFF, plaintext = 0123456789ABCDEF
@@ -1044,8 +1169,8 @@ mod tests {
 
     #[test]
     fn test_aes_encryption_uses_16_byte_blocks() {
-        let session_key = vec![0x11; 32];
-        let server_sectkn = vec![0x22; 32];
+        let session_key = vec![0x11; 64];
+        let server_sectkn = vec![0x22; 64];
         let ct = encrypt_password_bytes_with_algorithm(
             &session_key,
             &server_sectkn,

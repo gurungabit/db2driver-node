@@ -51,8 +51,12 @@ pub async fn authenticate(
 
     // Generate a DH key pair for encrypted auth and for any server-requested
     // renegotiation back to encrypted credentials.
-    let client_private = db2_proto::secmec9::generate_private_key();
-    let client_public = db2_proto::secmec9::calculate_public_key(&client_private);
+    let client_private =
+        db2_proto::secmec9::generate_private_key_with_algorithm(requested_encryption_algorithm);
+    let client_public = db2_proto::secmec9::calculate_public_key_with_algorithm(
+        &client_private,
+        requested_encryption_algorithm,
+    );
 
     let accsec_data = build_accsec_for_mechanism(
         requested_secmec,
@@ -155,6 +159,7 @@ pub async fn authenticate(
         accepted_encryption_algorithm_code,
         requested_encryption_algorithm,
     )?;
+    let accsecrd_detail = format_reply_detail(&accsecrd_obj);
     let credential_options = AuthCredentialOptions {
         credential_encoding,
         encrypted_password_encoding,
@@ -180,6 +185,7 @@ pub async fn authenticate(
         &client_private,
         config,
         credential_options,
+        &accsecrd_detail,
     )?;
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
 
@@ -459,13 +465,14 @@ fn build_secchk_for_mechanism(
     client_private: &[u8],
     config: &Config,
     credential_options: AuthCredentialOptions,
+    accsecrd_detail: &str,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD => {
             let server_sectkn = server_sectkn.ok_or_else(|| {
-                Error::Protocol(
-                    "ACCSECRD selected encrypted authentication but did not include SECTKN".into(),
-                )
+                Error::Protocol(format!(
+                    "ACCSECRD selected encrypted authentication but did not include SECTKN; {accsecrd_detail}"
+                ))
             })?;
             db2_proto::commands::secchk::build_secchk_eusridpwd_with_algorithm_and_encoding(
                 &config.database,
@@ -480,10 +487,9 @@ fn build_secchk_for_mechanism(
         }
         codepoints::SECMEC_USRENCPWD => {
             let server_sectkn = server_sectkn.ok_or_else(|| {
-                Error::Protocol(
-                    "ACCSECRD selected encrypted password authentication but did not include SECTKN"
-                        .into(),
-                )
+                Error::Protocol(format!(
+                    "ACCSECRD selected encrypted password authentication but did not include SECTKN; {accsecrd_detail}"
+                ))
             })?;
             db2_proto::commands::secchk::build_secchk_usencpwd_with_algorithm_and_encodings(
                 &config.database,

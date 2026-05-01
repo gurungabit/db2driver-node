@@ -213,11 +213,13 @@ const client = new Client({
   database: 'DSNLOC',
   user: 'APPUSER',
   password: 'secret',
-  securityMechanism: 'encryptedPassword',
+  securityMechanism: 'encrypted',
   encryptionAlgorithm: 'aes',
   credentialEncoding: 'utf8',
 })
 ```
+
+For Db2 for z/OS, IBM's current JDBC driver defaults to encrypted user ID and encrypted password security (`SECMEC 9`) with AES when ICSF is enabled on the subsystem. Use `securityMechanism: 'encryptedPassword'` only when your working JDBC configuration explicitly sets `securityMechanism=7`.
 
 ## Server Info
 
