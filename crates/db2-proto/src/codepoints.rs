@@ -24,6 +24,8 @@ pub const MGRLVLLS: u16 = 0x1404; // Manager Level List
 pub const CODPNT: u16 = 0x000C; // Code Point
 pub const SECMEC: u16 = 0x11A2; // Security Mechanism
 pub const SECTKN: u16 = 0x11DC; // Security Token
+pub const ENCALG: u16 = 0x1909; // Encryption Algorithm
+pub const ENCKEYLEN: u16 = 0x190A; // Encryption Key Length
 pub const USRID: u16 = 0x11A0; // User ID
 pub const PASSWORD: u16 = 0x11A1; // Password
 pub const RDBNAM: u16 = 0x2110; // Relational Database Name
@@ -93,6 +95,14 @@ pub const SECMEC_USRIDONL: u16 = 0x0004; // User ID only
 pub const SECMEC_USRIDNWPWD: u16 = 0x0005; // User ID and new password
 pub const SECMEC_USRENCPWD: u16 = 0x0007; // User ID and encrypted password
 pub const SECMEC_EUSRIDPWD: u16 = 0x0009; // Encrypted user ID and password
+
+// ============================================================
+// Encryption Algorithm / Key Length Values
+// ============================================================
+pub const ENCALG_DES: u16 = 0x0001; // Data Encryption Standard
+pub const ENCALG_AES: u16 = 0x0002; // Advanced Encryption Standard
+pub const ENCKEYLEN_DES_56: u16 = 0x0001; // 56-bit encryption key
+pub const ENCKEYLEN_AES_256: u16 = 0x0002; // 256-bit encryption key
 
 // ============================================================
 // Package / Query Parameters

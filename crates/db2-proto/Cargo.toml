@@ -6,4 +6,6 @@ description = "Pure DRDA protocol implementation for DB2 - no I/O dependencies"
 license = "MIT"
 
 [dependencies]
+aes = "0.8.4"
+cbc = { version = "0.1.2", features = ["alloc"] }
 dec = "0.4.11"

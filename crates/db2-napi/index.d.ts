@@ -13,6 +13,7 @@ export interface JsConnectionConfig {
   rejectUnauthorized?: boolean
   caCert?: string
   securityMechanism?: string
+  encryptionAlgorithm?: string
   credentialEncoding?: string
   encryptedPasswordEncoding?: string
   encryptedPasswordTokenEncoding?: string
@@ -48,6 +49,7 @@ export interface JsPoolConfig {
   rejectUnauthorized?: boolean
   caCert?: string
   securityMechanism?: string
+  encryptionAlgorithm?: string
   credentialEncoding?: string
   encryptedPasswordEncoding?: string
   encryptedPasswordTokenEncoding?: string

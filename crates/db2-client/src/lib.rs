@@ -13,7 +13,8 @@ pub mod types;
 
 pub use column::ColumnInfo;
 pub use config::{
-    Config, CredentialEncoding, EncryptedPasswordEncoding, SecurityMechanism, SslConfig,
+    Config, CredentialEncoding, EncryptedPasswordEncoding, EncryptionAlgorithm, SecurityMechanism,
+    SslConfig,
 };
 pub use connection::Client;
 pub use error::Error;

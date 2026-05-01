@@ -12,6 +12,7 @@ pub fn config_from_js(
     reject_unauthorized: Option<bool>,
     ca_cert: Option<String>,
     security_mechanism: Option<String>,
+    encryption_algorithm: Option<String>,
     credential_encoding: Option<String>,
     encrypted_password_encoding: Option<String>,
     encrypted_password_token_encoding: Option<String>,
@@ -28,6 +29,7 @@ pub fn config_from_js(
         user: user.to_string(),
         password: password.to_string(),
         security_mechanism: parse_security_mechanism(security_mechanism)?,
+        encryption_algorithm: parse_encryption_algorithm(encryption_algorithm)?,
         credential_encoding: parse_credential_encoding(credential_encoding)?,
         encrypted_password_encoding: parse_encrypted_password_encoding(
             encrypted_password_encoding,
@@ -92,6 +94,30 @@ fn parse_security_mechanism(value: Option<String>) -> napi::Result<db2_client::S
         }
         _ => Err(napi::Error::from_reason(format!(
             "Unsupported securityMechanism '{}'. Use 'encrypted', 'encryptedPassword', 'userPassword', or 'userOnly'.",
+            value
+        ))),
+    }
+}
+
+fn parse_encryption_algorithm(
+    value: Option<String>,
+) -> napi::Result<db2_client::EncryptionAlgorithm> {
+    let Some(value) = value else {
+        return Ok(db2_client::EncryptionAlgorithm::Des);
+    };
+
+    let normalized: String = value
+        .trim()
+        .chars()
+        .filter(|c| *c != '_' && *c != '-' && !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+
+    match normalized.as_str() {
+        "" | "des" | "des56" | "1" | "encalg1" => Ok(db2_client::EncryptionAlgorithm::Des),
+        "aes" | "aes256" | "2" | "encalg2" => Ok(db2_client::EncryptionAlgorithm::Aes),
+        _ => Err(napi::Error::from_reason(format!(
+            "Unsupported encryptionAlgorithm '{}'. Use 'des' or 'aes'.",
             value
         ))),
     }
@@ -313,6 +339,23 @@ mod tests {
             db2_client::CredentialEncoding::Ebcdic037
         );
         assert!(parse_credential_encoding(Some("unsupported".into())).is_err());
+    }
+
+    #[test]
+    fn encryption_algorithm_parser_accepts_public_aliases() {
+        assert_eq!(
+            parse_encryption_algorithm(None).unwrap(),
+            db2_client::EncryptionAlgorithm::Des
+        );
+        assert_eq!(
+            parse_encryption_algorithm(Some("AES-256".into())).unwrap(),
+            db2_client::EncryptionAlgorithm::Aes
+        );
+        assert_eq!(
+            parse_encryption_algorithm(Some("DES".into())).unwrap(),
+            db2_client::EncryptionAlgorithm::Des
+        );
+        assert!(parse_encryption_algorithm(Some("unsupported".into())).is_err());
     }
 
     #[test]

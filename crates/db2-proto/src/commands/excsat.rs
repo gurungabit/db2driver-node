@@ -11,6 +11,13 @@ pub struct ManagerLevel {
 
 /// Default manager levels for a DB2 client (matching pydrda/DB2 CLI).
 pub fn default_manager_levels() -> Vec<ManagerLevel> {
+    default_manager_levels_with_security_manager_level(7)
+}
+
+/// Default manager levels with a configurable Security Manager level.
+pub fn default_manager_levels_with_security_manager_level(
+    security_manager_level: u16,
+) -> Vec<ManagerLevel> {
     vec![
         ManagerLevel {
             code_point: AGENT,
@@ -30,10 +37,7 @@ pub fn default_manager_levels() -> Vec<ManagerLevel> {
         },
         ManagerLevel {
             code_point: SECMGR,
-            // The client currently implements the classic SECMEC 9 DES/DH
-            // flow. Advertising level 8+ can make z/OS require newer security
-            // parameters that we do not send yet.
-            level: 7,
+            level: security_manager_level,
         },
         ManagerLevel {
             code_point: UNICODEMGR,
@@ -80,12 +84,17 @@ pub fn build_excsat(
 
 /// Build an EXCSAT with sensible defaults matching DB2 CLI client.
 pub fn build_excsat_default() -> Vec<u8> {
+    build_excsat_with_security_manager_level(7)
+}
+
+/// Build an EXCSAT with a selected Security Manager level.
+pub fn build_excsat_with_security_manager_level(security_manager_level: u16) -> Vec<u8> {
     build_excsat(
         "db2wire",
         "db2wire-client",
         "QDB2/JVM",
         "SQL11014",
-        &default_manager_levels(),
+        &default_manager_levels_with_security_manager_level(security_manager_level),
     )
 }
 
@@ -115,5 +124,27 @@ mod tests {
             })
             .expect("EXCSAT should include SECMGR");
         assert_eq!(secmgr_level, 7);
+    }
+
+    #[test]
+    fn test_build_excsat_with_security_manager_level() {
+        let bytes = build_excsat_with_security_manager_level(9);
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let mgrlvlls = obj
+            .parameters()
+            .iter()
+            .find(|p| p.code_point == MGRLVLLS)
+            .expect("EXCSAT should include manager levels")
+            .data
+            .clone();
+        let secmgr_level = mgrlvlls
+            .chunks_exact(4)
+            .find_map(|chunk| {
+                let code_point = u16::from_be_bytes([chunk[0], chunk[1]]);
+                let level = u16::from_be_bytes([chunk[2], chunk[3]]);
+                (code_point == SECMGR).then_some(level)
+            })
+            .expect("EXCSAT should include SECMGR");
+        assert_eq!(secmgr_level, 9);
     }
 }

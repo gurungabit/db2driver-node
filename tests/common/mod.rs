@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use db2_client::{
-    Client, Config, CredentialEncoding, EncryptedPasswordEncoding, Pool, PoolConfig,
-    SecurityMechanism,
+    Client, Config, CredentialEncoding, EncryptedPasswordEncoding, EncryptionAlgorithm, Pool,
+    PoolConfig, SecurityMechanism,
 };
 use std::env;
 use std::sync::Once;
@@ -28,6 +28,7 @@ pub fn test_config() -> Config {
         user: env::var("DB2_TEST_USER").unwrap_or_else(|_| "db2inst1".into()),
         password: env::var("DB2_TEST_PASSWORD").unwrap_or_else(|_| "db2wire_test_pw".into()),
         security_mechanism: SecurityMechanism::EncryptedUserPassword,
+        encryption_algorithm: EncryptionAlgorithm::Des,
         credential_encoding: CredentialEncoding::Auto,
         encrypted_password_encoding: EncryptedPasswordEncoding::SameAsCredential,
         encrypted_password_token_encoding: EncryptedPasswordEncoding::SameAsCredential,

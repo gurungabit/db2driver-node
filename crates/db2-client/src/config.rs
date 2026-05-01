@@ -9,6 +9,7 @@ pub struct Config {
     pub user: String,
     pub password: String,
     pub security_mechanism: SecurityMechanism,
+    pub encryption_algorithm: EncryptionAlgorithm,
     pub credential_encoding: CredentialEncoding,
     pub encrypted_password_encoding: EncryptedPasswordEncoding,
     pub encrypted_password_token_encoding: EncryptedPasswordEncoding,
@@ -32,6 +33,15 @@ pub enum SecurityMechanism {
     UserPassword,
     /// User ID only (DRDA SECMEC 4).
     UserOnly,
+}
+
+/// DRDA encryption algorithm for encrypted authentication credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionAlgorithm {
+    /// Data Encryption Standard (classic DRDA default).
+    Des,
+    /// Advanced Encryption Standard with a 256-bit key.
+    Aes,
 }
 
 /// Encoding to use for DRDA credential string bytes in SECCHK.
@@ -85,6 +95,7 @@ impl Default for Config {
             user: String::new(),
             password: String::new(),
             security_mechanism: SecurityMechanism::EncryptedUserPassword,
+            encryption_algorithm: EncryptionAlgorithm::Des,
             credential_encoding: CredentialEncoding::Auto,
             encrypted_password_encoding: EncryptedPasswordEncoding::SameAsCredential,
             encrypted_password_token_encoding: EncryptedPasswordEncoding::SameAsCredential,

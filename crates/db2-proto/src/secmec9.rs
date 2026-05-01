@@ -7,6 +7,19 @@
 //! crate dependencies.
 
 use crate::codepage::utf8_to_ebcdic037;
+use aes::Aes256;
+use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+
+type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+
+/// Symmetric algorithm used after the DRDA Diffie-Hellman exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionAlgorithm {
+    /// Classic DRDA DES-CBC with a 56-bit key.
+    Des,
+    /// DRDA AES-CBC with a 256-bit key.
+    Aes,
+}
 
 // ---------------------------------------------------------------------------
 // DH constants (256-bit, big-endian)
@@ -709,11 +722,8 @@ fn des_cbc_encrypt(key: &[u8; 8], iv: &[u8; 8], plaintext: &[u8]) -> Vec<u8> {
 /// - IV       = `server_sectkn[12..20]`
 /// - Data     = password converted to EBCDIC 037, then PKCS5-padded
 pub fn encrypt_password(session_key: &[u8], server_sectkn: &[u8], password: &str) -> Vec<u8> {
-    let mut iv = [0u8; 8];
-    iv.copy_from_slice(&server_sectkn[12..20]);
-
     let ebcdic_password = utf8_to_ebcdic037(password);
-    encrypt_bytes_with_iv(session_key, &iv, &ebcdic_password)
+    encrypt_password_bytes(session_key, server_sectkn, &ebcdic_password)
 }
 
 /// Encrypt pre-encoded password bytes for DRDA SECMEC 0x0009 authentication.
@@ -722,10 +732,98 @@ pub fn encrypt_password_bytes(
     server_sectkn: &[u8],
     password: &[u8],
 ) -> Vec<u8> {
+    encrypt_password_bytes_with_algorithm(
+        session_key,
+        server_sectkn,
+        password,
+        EncryptionAlgorithm::Des,
+    )
+}
+
+/// Encrypt pre-encoded password bytes with the selected DRDA encryption algorithm.
+pub fn encrypt_password_bytes_with_algorithm(
+    session_key: &[u8],
+    server_sectkn: &[u8],
+    password: &[u8],
+    algorithm: EncryptionAlgorithm,
+) -> Vec<u8> {
+    match algorithm {
+        EncryptionAlgorithm::Des => {
+            let mut iv = [0u8; 8];
+            iv.copy_from_slice(&server_sectkn[12..20]);
+            encrypt_bytes_with_iv(session_key, &iv, password)
+        }
+        EncryptionAlgorithm::Aes => {
+            let mut iv = [0u8; 16];
+            iv.copy_from_slice(&server_sectkn[8..24]);
+            aes_cbc_encrypt(session_key, &iv, password)
+        }
+    }
+}
+
+/// Encrypt pre-encoded user ID bytes with the selected DRDA encryption algorithm.
+pub fn encrypt_userid_bytes_with_algorithm(
+    session_key: &[u8],
+    server_sectkn: &[u8],
+    userid: &[u8],
+    algorithm: EncryptionAlgorithm,
+) -> Vec<u8> {
+    match algorithm {
+        EncryptionAlgorithm::Des => {
+            let mut iv = [0u8; 8];
+            iv.copy_from_slice(&server_sectkn[12..20]);
+            encrypt_bytes_with_iv(session_key, &iv, userid)
+        }
+        EncryptionAlgorithm::Aes => {
+            let mut iv = [0u8; 16];
+            iv.copy_from_slice(&server_sectkn[8..24]);
+            aes_cbc_encrypt(session_key, &iv, userid)
+        }
+    }
+}
+
+/// Encrypt pre-encoded password bytes for DRDA SECMEC 0x0007 authentication
+/// with the selected DRDA encryption algorithm.
+pub fn encrypt_password_with_userid_iv_bytes_with_algorithm(
+    session_key: &[u8],
+    userid: &[u8],
+    password: &[u8],
+    algorithm: EncryptionAlgorithm,
+) -> Vec<u8> {
+    match algorithm {
+        EncryptionAlgorithm::Des => {
+            encrypt_password_with_userid_iv_bytes(session_key, userid, password)
+        }
+        EncryptionAlgorithm::Aes => {
+            let mut iv = [0u8; 16];
+            let copy_len = userid.len().min(16);
+            iv[..copy_len].copy_from_slice(&userid[..copy_len]);
+            aes_cbc_encrypt(session_key, &iv, password)
+        }
+    }
+}
+
+fn aes_cbc_encrypt(session_key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
+    let mut aes_key = [0u8; 32];
+    aes_key.copy_from_slice(&session_key[..32]);
+
+    Aes256CbcEnc::new(&aes_key.into(), iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plaintext)
+}
+
+/// Encrypt a user ID for DRDA SECMEC 0x0009 authentication.
+///
+/// Same algorithm as [`encrypt_password`] but applied to the user ID.
+pub fn encrypt_userid(session_key: &[u8], server_sectkn: &[u8], userid: &str) -> Vec<u8> {
+    let ebcdic_userid = utf8_to_ebcdic037(userid);
+    encrypt_userid_bytes(session_key, server_sectkn, &ebcdic_userid)
+}
+
+/// Encrypt pre-encoded user ID bytes for DRDA SECMEC 0x0009 authentication.
+pub fn encrypt_userid_bytes(session_key: &[u8], server_sectkn: &[u8], userid: &[u8]) -> Vec<u8> {
     let mut iv = [0u8; 8];
     iv.copy_from_slice(&server_sectkn[12..20]);
 
-    encrypt_bytes_with_iv(session_key, &iv, password)
+    encrypt_bytes_with_iv(session_key, &iv, userid)
 }
 
 /// Encrypt a password for DRDA SECMEC 0x0007 authentication.
@@ -764,25 +862,6 @@ fn encrypt_bytes_with_iv(session_key: &[u8], iv: &[u8; 8], plaintext: &[u8]) -> 
     des_key.copy_from_slice(&session_key[12..20]);
 
     des_cbc_encrypt(&des_key, iv, plaintext)
-}
-
-/// Encrypt a user ID for DRDA SECMEC 0x0009 authentication.
-///
-/// Same algorithm as [`encrypt_password`] but applied to the user ID.
-pub fn encrypt_userid(session_key: &[u8], server_sectkn: &[u8], userid: &str) -> Vec<u8> {
-    let mut iv = [0u8; 8];
-    iv.copy_from_slice(&server_sectkn[12..20]);
-
-    let ebcdic_userid = utf8_to_ebcdic037(userid);
-    encrypt_bytes_with_iv(session_key, &iv, &ebcdic_userid)
-}
-
-/// Encrypt pre-encoded user ID bytes for DRDA SECMEC 0x0009 authentication.
-pub fn encrypt_userid_bytes(session_key: &[u8], server_sectkn: &[u8], userid: &[u8]) -> Vec<u8> {
-    let mut iv = [0u8; 8];
-    iv.copy_from_slice(&server_sectkn[12..20]);
-
-    encrypt_bytes_with_iv(session_key, &iv, userid)
 }
 
 // ===========================================================================
@@ -961,6 +1040,27 @@ mod tests {
         let ct = encrypt_userid(&session_key, &server_sectkn, "db2admin");
         // "db2admin" = 8 EBCDIC bytes, PKCS5 adds a full block of padding -> 16 bytes
         assert_eq!(ct.len(), 16);
+    }
+
+    #[test]
+    fn test_aes_encryption_uses_16_byte_blocks() {
+        let session_key = vec![0x11; 32];
+        let server_sectkn = vec![0x22; 32];
+        let ct = encrypt_password_bytes_with_algorithm(
+            &session_key,
+            &server_sectkn,
+            b"mypassword",
+            EncryptionAlgorithm::Aes,
+        );
+        assert_eq!(ct.len(), 16);
+
+        let ct2 = encrypt_password_with_userid_iv_bytes_with_algorithm(
+            &session_key,
+            b"APPUSER",
+            b"1234567890123456",
+            EncryptionAlgorithm::Aes,
+        );
+        assert_eq!(ct2.len(), 32);
     }
 
     #[test]

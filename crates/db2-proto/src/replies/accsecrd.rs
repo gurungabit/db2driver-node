@@ -8,6 +8,8 @@ use crate::{ProtoError, Result};
 pub struct AccSecReply {
     pub security_mechanism: u16,
     pub security_token: Option<Vec<u8>>,
+    pub encryption_algorithm: Option<u16>,
+    pub encryption_key_length: Option<u16>,
 }
 
 /// Parse an ACCSECRD DDM object.
@@ -22,6 +24,8 @@ pub fn parse_accsecrd(obj: &DdmObject) -> Result<AccSecReply> {
     let params = obj.parameters();
     let mut secmec: Option<u16> = None;
     let mut sectkn: Option<Vec<u8>> = None;
+    let mut encalg: Option<u16> = None;
+    let mut enckeylen: Option<u16> = None;
 
     for param in &params {
         match param.code_point {
@@ -31,6 +35,12 @@ pub fn parse_accsecrd(obj: &DdmObject) -> Result<AccSecReply> {
             SECTKN => {
                 sectkn = Some(param.data.clone());
             }
+            ENCALG => {
+                encalg = param.as_u16();
+            }
+            ENCKEYLEN => {
+                enckeylen = param.as_u16();
+            }
             _ => {}
         }
     }
@@ -38,6 +48,8 @@ pub fn parse_accsecrd(obj: &DdmObject) -> Result<AccSecReply> {
     Ok(AccSecReply {
         security_mechanism: secmec.unwrap_or(0),
         security_token: sectkn,
+        encryption_algorithm: encalg,
+        encryption_key_length: enckeylen,
     })
 }
 
@@ -54,5 +66,21 @@ mod tests {
         let reply = parse_accsecrd(&obj).unwrap();
         assert_eq!(reply.security_mechanism, SECMEC_USRIDPWD);
         assert!(reply.security_token.is_none());
+        assert_eq!(reply.encryption_algorithm, None);
+        assert_eq!(reply.encryption_key_length, None);
+    }
+
+    #[test]
+    fn test_parse_accsecrd_encryption_parameters() {
+        let mut builder = crate::ddm::DdmBuilder::new(ACCSECRD);
+        builder.add_u16(SECMEC, SECMEC_USRENCPWD);
+        builder.add_u16(ENCALG, ENCALG_AES);
+        builder.add_u16(ENCKEYLEN, ENCKEYLEN_AES_256);
+        let bytes = builder.build();
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let reply = parse_accsecrd(&obj).unwrap();
+        assert_eq!(reply.security_mechanism, SECMEC_USRENCPWD);
+        assert_eq!(reply.encryption_algorithm, Some(ENCALG_AES));
+        assert_eq!(reply.encryption_key_length, Some(ENCKEYLEN_AES_256));
     }
 }

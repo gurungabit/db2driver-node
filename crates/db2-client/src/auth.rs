@@ -1,7 +1,9 @@
 use bytes::BytesMut;
 use tracing::{debug, trace, warn};
 
-use crate::config::{Config, CredentialEncoding, EncryptedPasswordEncoding, SecurityMechanism};
+use crate::config::{
+    Config, CredentialEncoding, EncryptedPasswordEncoding, EncryptionAlgorithm, SecurityMechanism,
+};
 use crate::error::Error;
 use crate::transport::Transport;
 use db2_proto::codepoints;
@@ -31,7 +33,10 @@ pub async fn authenticate(
     debug!("Starting DRDA authentication handshake");
 
     // Phase 1: EXCSAT + ACCSEC — negotiate the requested security mechanism.
-    let excsat_data = db2_proto::commands::excsat::build_excsat_default();
+    let requested_encryption_algorithm = proto_encryption_algorithm(config.encryption_algorithm);
+    let excsat_data = db2_proto::commands::excsat::build_excsat_with_security_manager_level(
+        security_manager_level(config.encryption_algorithm),
+    );
     let requested_secmec = security_mechanism_code(config.security_mechanism);
     if matches!(
         config.security_mechanism,
@@ -49,8 +54,12 @@ pub async fn authenticate(
     let client_private = db2_proto::secmec9::generate_private_key();
     let client_public = db2_proto::secmec9::calculate_public_key(&client_private);
 
-    let accsec_data =
-        build_accsec_for_mechanism(requested_secmec, &config.database, &client_public)?;
+    let accsec_data = build_accsec_for_mechanism(
+        requested_secmec,
+        &config.database,
+        &client_public,
+        requested_encryption_algorithm,
+    )?;
 
     let mut writer = DssWriter::new(1);
     writer.write_request(&excsat_data, true); // chained
@@ -107,17 +116,26 @@ pub async fn authenticate(
         config.encrypted_password_token_encoding,
         credential_encoding,
     );
-
     // Parse ACCSECRD — get server's accepted mechanism and SECTKN
     let accsecrd_frame = &frames[1];
     let (accsecrd_obj, _) =
         DdmObject::parse(&accsecrd_frame.payload).map_err(|e| Error::Protocol(e.to_string()))?;
 
-    let (accepted_secmec, server_sectkn) = match accsecrd_obj.code_point {
+    let (
+        accepted_secmec,
+        server_sectkn,
+        accepted_encryption_algorithm_code,
+        accepted_encryption_key_length,
+    ) = match accsecrd_obj.code_point {
         codepoints::ACCSECRD => {
             let reply = db2_proto::replies::accsecrd::parse_accsecrd(&accsecrd_obj)
                 .map_err(|e| Error::Protocol(e.to_string()))?;
-            (reply.security_mechanism, reply.security_token)
+            (
+                reply.security_mechanism,
+                reply.security_token,
+                reply.encryption_algorithm,
+                reply.encryption_key_length,
+            )
         }
         codepoints::RDBNACRM | 0x221A => {
             // Some DB2 LUW servers reject an unknown RDB name during ACCSEC
@@ -133,12 +151,24 @@ pub async fn authenticate(
             )));
         }
     };
+    let negotiated_encryption_algorithm = negotiated_encryption_algorithm(
+        accepted_encryption_algorithm_code,
+        requested_encryption_algorithm,
+    )?;
+    let credential_options = AuthCredentialOptions {
+        credential_encoding,
+        encrypted_password_encoding,
+        encrypted_password_token_encoding,
+        encryption_algorithm: negotiated_encryption_algorithm,
+    };
 
     debug!(
-        "Phase 1 complete: server={}, secmec=0x{:04X}, sectkn={}",
+        "Phase 1 complete: server={}, secmec=0x{:04X}, sectkn={}, encalg={:?}, enckeylen={:?}",
         server_info.product_name,
         accepted_secmec,
-        server_sectkn.as_ref().map_or(0, Vec::len)
+        server_sectkn.as_ref().map_or(0, Vec::len),
+        accepted_encryption_algorithm_code,
+        accepted_encryption_key_length
     );
 
     // Phase 2: SECCHK + ACCRDB. If the server negotiated a mechanism other
@@ -149,16 +179,18 @@ pub async fn authenticate(
         server_sectkn.as_deref(),
         &client_private,
         config,
-        credential_encoding,
-        encrypted_password_encoding,
-        encrypted_password_token_encoding,
+        credential_options,
     )?;
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
 
     let mut writer = DssWriter::new(1);
     if renegotiate_security {
-        let accsec_data =
-            build_accsec_for_mechanism(accepted_secmec, &config.database, &client_public)?;
+        let accsec_data = build_accsec_for_mechanism(
+            accepted_secmec,
+            &config.database,
+            &client_public,
+            negotiated_encryption_algorithm,
+        )?;
         writer.write_request(&accsec_data, true); // chained
         writer.set_correlation_id(2);
     }
@@ -234,6 +266,9 @@ pub async fn authenticate(
                         credential_encoding,
                         encrypted_password_encoding,
                         encrypted_password_token_encoding,
+                        negotiated_encryption_algorithm,
+                        accepted_encryption_algorithm_code,
+                        accepted_encryption_key_length,
                     );
                     return Err(Error::Auth(format!(
                         "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}, {}",
@@ -348,10 +383,49 @@ fn security_mechanism_code(security_mechanism: SecurityMechanism) -> u16 {
     }
 }
 
+fn security_manager_level(encryption_algorithm: EncryptionAlgorithm) -> u16 {
+    match encryption_algorithm {
+        EncryptionAlgorithm::Des => 7,
+        EncryptionAlgorithm::Aes => 9,
+    }
+}
+
+fn proto_encryption_algorithm(
+    encryption_algorithm: EncryptionAlgorithm,
+) -> db2_proto::secmec9::EncryptionAlgorithm {
+    match encryption_algorithm {
+        EncryptionAlgorithm::Des => db2_proto::secmec9::EncryptionAlgorithm::Des,
+        EncryptionAlgorithm::Aes => db2_proto::secmec9::EncryptionAlgorithm::Aes,
+    }
+}
+
+fn negotiated_encryption_algorithm(
+    accepted_encryption_algorithm_code: Option<u16>,
+    requested_encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
+) -> Result<db2_proto::secmec9::EncryptionAlgorithm, Error> {
+    match accepted_encryption_algorithm_code {
+        Some(codepoints::ENCALG_DES) => Ok(db2_proto::secmec9::EncryptionAlgorithm::Des),
+        Some(codepoints::ENCALG_AES) => Ok(db2_proto::secmec9::EncryptionAlgorithm::Aes),
+        Some(other) => Err(Error::Protocol(format!(
+            "Server selected unsupported DRDA encryption algorithm 0x{other:04X}"
+        ))),
+        None => Ok(requested_encryption_algorithm),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AuthCredentialOptions {
+    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_token_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
+}
+
 fn build_accsec_for_mechanism(
     security_mechanism: u16,
     rdbnam: &str,
     client_public: &[u8],
+    encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD
@@ -366,6 +440,10 @@ fn build_accsec_for_mechanism(
                 codepoints::SECMEC_EUSRIDPWD | codepoints::SECMEC_USRENCPWD
             ) {
                 ddm.add_code_point(codepoints::SECTKN, client_public);
+                if encryption_algorithm == db2_proto::secmec9::EncryptionAlgorithm::Aes {
+                    ddm.add_u16(codepoints::ENCALG, codepoints::ENCALG_AES);
+                    ddm.add_u16(codepoints::ENCKEYLEN, codepoints::ENCKEYLEN_AES_256);
+                }
             }
             Ok(ddm.build())
         }
@@ -380,9 +458,7 @@ fn build_secchk_for_mechanism(
     server_sectkn: Option<&[u8]>,
     client_private: &[u8],
     config: &Config,
-    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
-    encrypted_password_encoding: db2_proto::commands::secchk::CredentialEncoding,
-    encrypted_password_token_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    credential_options: AuthCredentialOptions,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD => {
@@ -391,13 +467,14 @@ fn build_secchk_for_mechanism(
                     "ACCSECRD selected encrypted authentication but did not include SECTKN".into(),
                 )
             })?;
-            db2_proto::commands::secchk::build_secchk_eusridpwd_with_encoding(
+            db2_proto::commands::secchk::build_secchk_eusridpwd_with_algorithm_and_encoding(
                 &config.database,
                 &config.user,
                 &config.password,
                 server_sectkn,
                 client_private,
-                credential_encoding,
+                credential_options.credential_encoding,
+                credential_options.encryption_algorithm,
             )
             .map_err(Error::from)
         }
@@ -408,17 +485,18 @@ fn build_secchk_for_mechanism(
                         .into(),
                 )
             })?;
-            db2_proto::commands::secchk::build_secchk_usencpwd_with_encodings(
+            db2_proto::commands::secchk::build_secchk_usencpwd_with_algorithm_and_encodings(
                 &config.database,
                 &config.user,
                 &config.password,
                 server_sectkn,
                 client_private,
                 db2_proto::commands::secchk::EncryptedPasswordCredentialEncodings {
-                    user_id: credential_encoding,
-                    password: encrypted_password_encoding,
-                    password_token: encrypted_password_token_encoding,
+                    user_id: credential_options.credential_encoding,
+                    password: credential_options.encrypted_password_encoding,
+                    password_token: credential_options.encrypted_password_token_encoding,
                 },
+                credential_options.encryption_algorithm,
             )
             .map_err(Error::from)
         }
@@ -427,13 +505,13 @@ fn build_secchk_for_mechanism(
                 &config.database,
                 &config.user,
                 &config.password,
-                credential_encoding,
+                credential_options.credential_encoding,
             ),
         ),
         codepoints::SECMEC_USRIDONL => {
             let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::SECCHK);
             ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_USRIDONL);
-            let user_id = encode_credential(&config.user, credential_encoding);
+            let user_id = encode_credential(&config.user, credential_options.credential_encoding);
             ddm.add_code_point(codepoints::USRID, &user_id);
             Ok(ddm.build())
         }
@@ -478,14 +556,28 @@ fn format_auth_encoding_detail(
     credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
     encrypted_password_encoding: db2_proto::commands::secchk::CredentialEncoding,
     encrypted_password_token_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
+    accepted_encryption_algorithm_code: Option<u16>,
+    accepted_encryption_key_length: Option<u16>,
 ) -> String {
+    let encryption_detail = format!(
+        "encryption_algorithm={encryption_algorithm:?}, accepted_encalg={}, accepted_enckeylen={}",
+        format_optional_u16(accepted_encryption_algorithm_code),
+        format_optional_u16(accepted_encryption_key_length)
+    );
     if accepted_secmec == codepoints::SECMEC_USRENCPWD {
         format!(
-            "credential_encoding={credential_encoding:?}, encrypted_password_encoding={encrypted_password_encoding:?}, encrypted_password_token_encoding={encrypted_password_token_encoding:?}"
+            "credential_encoding={credential_encoding:?}, encrypted_password_encoding={encrypted_password_encoding:?}, encrypted_password_token_encoding={encrypted_password_token_encoding:?}, {encryption_detail}"
         )
     } else {
-        format!("credential_encoding={credential_encoding:?}")
+        format!("credential_encoding={credential_encoding:?}, {encryption_detail}")
     }
+}
+
+fn format_optional_u16(value: Option<u16>) -> String {
+    value
+        .map(|value| format!("0x{value:04X}"))
+        .unwrap_or_else(|| "none".into())
 }
 
 fn server_supports_utf8_credentials(server_info: &ServerInfo) -> bool {
@@ -619,6 +711,8 @@ fn code_point_name(code_point: u16) -> &'static str {
         codepoints::SVRCOD => "SVRCOD",
         codepoints::SECMEC => "SECMEC",
         codepoints::SECTKN => "SECTKN",
+        codepoints::ENCALG => "ENCALG",
+        codepoints::ENCKEYLEN => "ENCKEYLEN",
         codepoints::USRID => "USRID",
         codepoints::PASSWORD => "PASSWORD",
         codepoints::RDBNAM => "RDBNAM",
@@ -697,24 +791,60 @@ mod tests {
     #[test]
     fn accsec_includes_sectkn_only_for_encrypted_auth() {
         let public_key = [0xAA; 32];
-        let encrypted =
-            build_accsec_for_mechanism(codepoints::SECMEC_EUSRIDPWD, "DSNDB04", &public_key)
-                .unwrap();
+        let encrypted = build_accsec_for_mechanism(
+            codepoints::SECMEC_EUSRIDPWD,
+            "DSNDB04",
+            &public_key,
+            db2_proto::secmec9::EncryptionAlgorithm::Des,
+        )
+        .unwrap();
         let (encrypted_obj, _) = DdmObject::parse(&encrypted).unwrap();
         assert!(encrypted_obj.find_param(codepoints::SECTKN).is_some());
 
-        let encrypted_password =
-            build_accsec_for_mechanism(codepoints::SECMEC_USRENCPWD, "DSNDB04", &public_key)
-                .unwrap();
+        let encrypted_password = build_accsec_for_mechanism(
+            codepoints::SECMEC_USRENCPWD,
+            "DSNDB04",
+            &public_key,
+            db2_proto::secmec9::EncryptionAlgorithm::Des,
+        )
+        .unwrap();
         let (encrypted_password_obj, _) = DdmObject::parse(&encrypted_password).unwrap();
         assert!(encrypted_password_obj
             .find_param(codepoints::SECTKN)
             .is_some());
 
-        let clear = build_accsec_for_mechanism(codepoints::SECMEC_USRIDPWD, "DSNDB04", &public_key)
-            .unwrap();
+        let clear = build_accsec_for_mechanism(
+            codepoints::SECMEC_USRIDPWD,
+            "DSNDB04",
+            &public_key,
+            db2_proto::secmec9::EncryptionAlgorithm::Des,
+        )
+        .unwrap();
         let (clear_obj, _) = DdmObject::parse(&clear).unwrap();
         assert!(clear_obj.find_param(codepoints::SECTKN).is_none());
+    }
+
+    #[test]
+    fn accsec_includes_aes_encryption_parameters_when_requested() {
+        let public_key = [0xAA; 32];
+        let encrypted_password = build_accsec_for_mechanism(
+            codepoints::SECMEC_USRENCPWD,
+            "DSNDB04",
+            &public_key,
+            db2_proto::secmec9::EncryptionAlgorithm::Aes,
+        )
+        .unwrap();
+        let (obj, _) = DdmObject::parse(&encrypted_password).unwrap();
+        assert_eq!(
+            obj.find_param(codepoints::ENCALG)
+                .and_then(|param| param.as_u16()),
+            Some(codepoints::ENCALG_AES)
+        );
+        assert_eq!(
+            obj.find_param(codepoints::ENCKEYLEN)
+                .and_then(|param| param.as_u16()),
+            Some(codepoints::ENCKEYLEN_AES_256)
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 use crate::codepage::{pad_rdbnam, utf8_to_ebcdic037};
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
+use crate::secmec9::EncryptionAlgorithm;
 use crate::{ProtoError, Result};
 
 /// Encoding for credential string bytes sent in SECCHK.
@@ -151,6 +152,28 @@ pub fn build_secchk_eusridpwd_with_encoding(
     client_private: &[u8],
     credential_encoding: CredentialEncoding,
 ) -> Result<Vec<u8>> {
+    build_secchk_eusridpwd_with_algorithm_and_encoding(
+        _rdbnam,
+        user_id,
+        password,
+        server_sectkn,
+        client_private,
+        credential_encoding,
+        EncryptionAlgorithm::Des,
+    )
+}
+
+/// Build SECCHK for encrypted user ID + password authentication with encoded
+/// credentials and the selected DRDA encryption algorithm.
+pub fn build_secchk_eusridpwd_with_algorithm_and_encoding(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    server_sectkn: &[u8],
+    client_private: &[u8],
+    credential_encoding: CredentialEncoding,
+    encryption_algorithm: EncryptionAlgorithm,
+) -> Result<Vec<u8>> {
     if server_sectkn.len() != 32 {
         return Err(ProtoError::Other(format!(
             "ACCSECRD returned an invalid SECTKN for encrypted authentication: expected 32 bytes, got {}",
@@ -161,10 +184,18 @@ pub fn build_secchk_eusridpwd_with_encoding(
     let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
     let encoded_user_id = credential_encoding.encode(user_id);
     let encoded_password = credential_encoding.encode(password);
-    let encrypted_user_id =
-        crate::secmec9::encrypt_userid_bytes(&session_key, server_sectkn, &encoded_user_id);
-    let encrypted_password =
-        crate::secmec9::encrypt_password_bytes(&session_key, server_sectkn, &encoded_password);
+    let encrypted_user_id = crate::secmec9::encrypt_userid_bytes_with_algorithm(
+        &session_key,
+        server_sectkn,
+        &encoded_user_id,
+        encryption_algorithm,
+    );
+    let encrypted_password = crate::secmec9::encrypt_password_bytes_with_algorithm(
+        &session_key,
+        server_sectkn,
+        &encoded_password,
+        encryption_algorithm,
+    );
 
     let mut ddm = DdmBuilder::new(SECCHK);
     ddm.add_u16(SECMEC, SECMEC_EUSRIDPWD);
@@ -224,6 +255,28 @@ pub fn build_secchk_usencpwd_with_encodings(
     client_private: &[u8],
     credential_encodings: EncryptedPasswordCredentialEncodings,
 ) -> Result<Vec<u8>> {
+    build_secchk_usencpwd_with_algorithm_and_encodings(
+        _rdbnam,
+        user_id,
+        password,
+        server_sectkn,
+        client_private,
+        credential_encodings,
+        EncryptionAlgorithm::Des,
+    )
+}
+
+/// Build SECCHK for user ID + encrypted password authentication with separate
+/// encodings and the selected DRDA encryption algorithm.
+pub fn build_secchk_usencpwd_with_algorithm_and_encodings(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    server_sectkn: &[u8],
+    client_private: &[u8],
+    credential_encodings: EncryptedPasswordCredentialEncodings,
+    encryption_algorithm: EncryptionAlgorithm,
+) -> Result<Vec<u8>> {
     if server_sectkn.len() != 32 {
         return Err(ProtoError::Other(format!(
             "ACCSECRD returned an invalid SECTKN for encrypted password authentication: expected 32 bytes, got {}",
@@ -235,10 +288,11 @@ pub fn build_secchk_usencpwd_with_encodings(
     let encoded_user_id = credential_encodings.user_id.encode(user_id);
     let encoded_password = credential_encodings.password.encode(password);
     let password_token = credential_encodings.password_token.encode(user_id);
-    let encrypted_password = crate::secmec9::encrypt_password_with_userid_iv_bytes(
+    let encrypted_password = crate::secmec9::encrypt_password_with_userid_iv_bytes_with_algorithm(
         &session_key,
         &password_token,
         &encoded_password,
+        encryption_algorithm,
     );
 
     let mut ddm = DdmBuilder::new(SECCHK);
