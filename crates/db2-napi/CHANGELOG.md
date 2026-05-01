@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.17](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.17) (2026-05-01)
+
+### Bug Fixes
+
+- skip LUW post-auth initialization for Db2 for z/OS servers
+
 ## [0.1.7-zos.16](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.16) (2026-05-01)
 
 ### Bug Fixes

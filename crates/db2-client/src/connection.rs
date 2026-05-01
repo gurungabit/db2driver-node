@@ -400,6 +400,7 @@ impl ClientInner {
             };
 
         self.transport = Some(transport);
+        let skip_post_auth_init = is_db2_zos_server(&server_info);
         self.server_info = Some(server_info);
         self.correlation_id = next_corr_id;
         self.section_number = DIRECT_QUERY_SECTION;
@@ -416,9 +417,13 @@ impl ClientInner {
             self.session_generation = 1;
         }
 
-        if let Err(err) = self.post_auth_init().await {
-            self.reset_session_state(false).await;
-            return Err(err);
+        if skip_post_auth_init {
+            debug!("Skipping LUW-style post-auth init for Db2 for z/OS server");
+        } else {
+            if let Err(err) = self.post_auth_init().await {
+                self.reset_session_state(false).await;
+                return Err(err);
+            }
         }
 
         debug!("Client connected to DB2 server");
@@ -1406,6 +1411,12 @@ pub(crate) fn ensure_sqlstt_sql_len(sql: &str) -> Result<(), Error> {
         )));
     }
     Ok(())
+}
+
+fn is_db2_zos_server(server_info: &ServerInfo) -> bool {
+    [&server_info.server_release, &server_info.server_class]
+        .iter()
+        .any(|value| value.trim_start().to_ascii_uppercase().starts_with("DSN"))
 }
 
 pub(crate) fn build_sqldta(
