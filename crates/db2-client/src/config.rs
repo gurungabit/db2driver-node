@@ -23,6 +23,8 @@ pub struct Config {
 pub enum SecurityMechanism {
     /// Encrypted user ID and password (DRDA SECMEC 9).
     EncryptedUserPassword,
+    /// Clear user ID and encrypted password (DRDA SECMEC 7).
+    EncryptedPassword,
     /// User ID and password (DRDA SECMEC 3).
     UserPassword,
     /// User ID only (DRDA SECMEC 4).

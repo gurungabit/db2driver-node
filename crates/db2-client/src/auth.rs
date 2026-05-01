@@ -217,9 +217,11 @@ pub async fn authenticate(
                 saw_secchkrm = true;
                 if !reply.is_success() {
                     return Err(Error::Auth(format!(
-                        "Security check failed: severity={}, check_code={}",
+                        "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}",
                         reply.severity_code,
-                        format_security_check_code(reply.security_check_code)
+                        format_security_check_code(reply.security_check_code),
+                        requested_secmec,
+                        accepted_secmec
                     )));
                 }
                 debug!("Security check passed");
@@ -320,6 +322,7 @@ pub async fn authenticate(
 fn security_mechanism_code(security_mechanism: SecurityMechanism) -> u16 {
     match security_mechanism {
         SecurityMechanism::EncryptedUserPassword => codepoints::SECMEC_EUSRIDPWD,
+        SecurityMechanism::EncryptedPassword => codepoints::SECMEC_USRENCPWD,
         SecurityMechanism::UserPassword => codepoints::SECMEC_USRIDPWD,
         SecurityMechanism::UserOnly => codepoints::SECMEC_USRIDONL,
     }
@@ -332,12 +335,16 @@ fn build_accsec_for_mechanism(
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD
+        | codepoints::SECMEC_USRENCPWD
         | codepoints::SECMEC_USRIDPWD
         | codepoints::SECMEC_USRIDONL => {
             let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::ACCSEC);
             ddm.add_u16(codepoints::SECMEC, security_mechanism);
             ddm.add_code_point(codepoints::RDBNAM, &db2_proto::codepage::pad_rdbnam(rdbnam));
-            if security_mechanism == codepoints::SECMEC_EUSRIDPWD {
+            if matches!(
+                security_mechanism,
+                codepoints::SECMEC_EUSRIDPWD | codepoints::SECMEC_USRENCPWD
+            ) {
                 ddm.add_code_point(codepoints::SECTKN, client_public);
             }
             Ok(ddm.build())
@@ -362,6 +369,22 @@ fn build_secchk_for_mechanism(
                 )
             })?;
             db2_proto::commands::secchk::build_secchk_eusridpwd(
+                &config.database,
+                &config.user,
+                &config.password,
+                server_sectkn,
+                client_private,
+            )
+            .map_err(Error::from)
+        }
+        codepoints::SECMEC_USRENCPWD => {
+            let server_sectkn = server_sectkn.ok_or_else(|| {
+                Error::Protocol(
+                    "ACCSECRD selected encrypted password authentication but did not include SECTKN"
+                        .into(),
+                )
+            })?;
+            db2_proto::commands::secchk::build_secchk_usencpwd(
                 &config.database,
                 &config.user,
                 &config.password,
@@ -585,6 +608,14 @@ mod tests {
                 .unwrap();
         let (encrypted_obj, _) = DdmObject::parse(&encrypted).unwrap();
         assert!(encrypted_obj.find_param(codepoints::SECTKN).is_some());
+
+        let encrypted_password =
+            build_accsec_for_mechanism(codepoints::SECMEC_USRENCPWD, "DSNDB04", &public_key)
+                .unwrap();
+        let (encrypted_password_obj, _) = DdmObject::parse(&encrypted_password).unwrap();
+        assert!(encrypted_password_obj
+            .find_param(codepoints::SECTKN)
+            .is_some());
 
         let clear = build_accsec_for_mechanism(codepoints::SECMEC_USRIDPWD, "DSNDB04", &public_key)
             .unwrap();

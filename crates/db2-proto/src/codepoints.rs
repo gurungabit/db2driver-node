@@ -91,6 +91,7 @@ pub const XAMGR: u16 = 0x14CC; // XA Transaction Manager
 pub const SECMEC_USRIDPWD: u16 = 0x0003; // User ID and password
 pub const SECMEC_USRIDONL: u16 = 0x0004; // User ID only
 pub const SECMEC_USRIDNWPWD: u16 = 0x0005; // User ID and new password
+pub const SECMEC_USRENCPWD: u16 = 0x0007; // User ID and encrypted password
 pub const SECMEC_EUSRIDPWD: u16 = 0x0009; // Encrypted user ID and password
 
 // ============================================================

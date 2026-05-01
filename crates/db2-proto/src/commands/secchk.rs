@@ -82,6 +82,36 @@ pub fn build_secchk_eusridpwd(
     Ok(ddm.build())
 }
 
+/// Build SECCHK for user ID + encrypted password authentication (SECMEC 0x0007).
+///
+/// The user ID is sent as a clear USRID parameter. The password is encrypted
+/// with the Diffie-Hellman session key negotiated through ACCSEC/ACCSECRD and
+/// sent as a SECTKN parameter.
+pub fn build_secchk_usencpwd(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    server_sectkn: &[u8],
+    client_private: &[u8],
+) -> Result<Vec<u8>> {
+    if server_sectkn.len() != 32 {
+        return Err(ProtoError::Other(format!(
+            "ACCSECRD returned an invalid SECTKN for encrypted password authentication: expected 32 bytes, got {}",
+            server_sectkn.len()
+        )));
+    }
+
+    let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
+    let encrypted_password =
+        crate::secmec9::encrypt_password_with_userid_iv(&session_key, user_id, password);
+
+    let mut ddm = DdmBuilder::new(SECCHK);
+    ddm.add_u16(SECMEC, SECMEC_USRENCPWD);
+    ddm.add_code_point(USRID, &utf8_to_ebcdic037(user_id));
+    ddm.add_code_point(SECTKN, &encrypted_password);
+    Ok(ddm.build())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +159,29 @@ mod tests {
         assert!(!params.iter().any(|p| p.code_point == RDBNAM));
         assert_eq!(params.iter().filter(|p| p.code_point == SECTKN).count(), 2);
         assert!(!params.iter().any(|p| p.code_point == USRID));
+        assert!(!params.iter().any(|p| p.code_point == PASSWORD));
+    }
+
+    #[test]
+    fn test_build_secchk_usencpwd() {
+        let client_private = crate::secmec9::generate_private_key();
+        let server_private = crate::secmec9::generate_private_key();
+        let server_public = crate::secmec9::calculate_public_key(&server_private);
+
+        let bytes = build_secchk_usencpwd(
+            "testdb",
+            "db2inst1",
+            "password123",
+            &server_public,
+            &client_private,
+        )
+        .unwrap();
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        assert_eq!(obj.code_point, SECCHK);
+        let params = obj.parameters();
+        assert!(!params.iter().any(|p| p.code_point == RDBNAM));
+        assert!(params.iter().any(|p| p.code_point == USRID));
+        assert_eq!(params.iter().filter(|p| p.code_point == SECTKN).count(), 1);
         assert!(!params.iter().any(|p| p.code_point == PASSWORD));
     }
 }

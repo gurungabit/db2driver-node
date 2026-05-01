@@ -709,14 +709,35 @@ fn des_cbc_encrypt(key: &[u8; 8], iv: &[u8; 8], plaintext: &[u8]) -> Vec<u8> {
 /// - IV       = `server_sectkn[12..20]`
 /// - Data     = password converted to EBCDIC 037, then PKCS5-padded
 pub fn encrypt_password(session_key: &[u8], server_sectkn: &[u8], password: &str) -> Vec<u8> {
-    let mut des_key = [0u8; 8];
-    des_key.copy_from_slice(&session_key[12..20]);
-
     let mut iv = [0u8; 8];
     iv.copy_from_slice(&server_sectkn[12..20]);
 
+    encrypt_password_with_iv(session_key, &iv, password)
+}
+
+/// Encrypt a password for DRDA SECMEC 0x0007 authentication.
+///
+/// SECMEC 7 sends the user ID in clear text and uses the EBCDIC user ID,
+/// zero-padded or truncated to 8 bytes, as the DES-CBC IV.
+pub fn encrypt_password_with_userid_iv(
+    session_key: &[u8],
+    userid: &str,
+    password: &str,
+) -> Vec<u8> {
+    let userid_bytes = utf8_to_ebcdic037(userid);
+    let mut iv = [0u8; 8];
+    let copy_len = userid_bytes.len().min(8);
+    iv[..copy_len].copy_from_slice(&userid_bytes[..copy_len]);
+
+    encrypt_password_with_iv(session_key, &iv, password)
+}
+
+fn encrypt_password_with_iv(session_key: &[u8], iv: &[u8; 8], password: &str) -> Vec<u8> {
+    let mut des_key = [0u8; 8];
+    des_key.copy_from_slice(&session_key[12..20]);
+
     let ebcdic_password = utf8_to_ebcdic037(password);
-    des_cbc_encrypt(&des_key, &iv, &ebcdic_password)
+    des_cbc_encrypt(&des_key, iv, &ebcdic_password)
 }
 
 /// Encrypt a user ID for DRDA SECMEC 0x0009 authentication.

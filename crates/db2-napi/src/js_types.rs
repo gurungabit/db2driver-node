@@ -72,6 +72,8 @@ fn parse_security_mechanism(value: Option<String>) -> napi::Result<db2_client::S
         | "eusridpwd"
         | "encrypteduserpassword"
         | "encrypteduseridpassword" => Ok(db2_client::SecurityMechanism::EncryptedUserPassword),
+        "7" | "secmec7" | "usencpwd" | "usrencryptedpassword" | "encryptedpassword"
+        | "encryptedpasswordonly" => Ok(db2_client::SecurityMechanism::EncryptedPassword),
         "3" | "secmec3" | "clear" | "usridpwd" | "userpassword" | "useridpassword" => {
             Ok(db2_client::SecurityMechanism::UserPassword)
         }
@@ -79,7 +81,7 @@ fn parse_security_mechanism(value: Option<String>) -> napi::Result<db2_client::S
             Ok(db2_client::SecurityMechanism::UserOnly)
         }
         _ => Err(napi::Error::from_reason(format!(
-            "Unsupported securityMechanism '{}'. Use 'encrypted', 'userPassword', or 'userOnly'.",
+            "Unsupported securityMechanism '{}'. Use 'encrypted', 'encryptedPassword', 'userPassword', or 'userOnly'.",
             value
         ))),
     }
@@ -217,6 +219,10 @@ mod tests {
         assert_eq!(
             parse_security_mechanism(Some("SECMEC-3".into())).unwrap(),
             db2_client::SecurityMechanism::UserPassword
+        );
+        assert_eq!(
+            parse_security_mechanism(Some("encryptedPassword".into())).unwrap(),
+            db2_client::SecurityMechanism::EncryptedPassword
         );
         assert!(parse_security_mechanism(Some("unsupported".into())).is_err());
     }
