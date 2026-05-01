@@ -66,7 +66,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `user` | `string` | — | Username |
 | `password` | `string` | — | Password |
 | `securityMechanism` | `string` | `'encrypted'` | DRDA authentication mechanism: `'encrypted'` (SECMEC 9), `'encryptedPassword'` (SECMEC 7), `'userPassword'` (SECMEC 3), or `'userOnly'` (SECMEC 4) |
-| `encryptionAlgorithm` | `string` | `'des'` | DRDA encrypted credential algorithm: `'des'` or `'aes'` |
+| `encryptionAlgorithm` | `string` | `'aes'` | DRDA encrypted credential algorithm: `'aes'` or `'des'` |
 | `credentialEncoding` | `string` | `'auto'` | Credential string encoding for `SECCHK`: `'auto'`, `'utf8'`, or `'ebcdic'` |
 | `encryptedPasswordEncoding` | `string` | `'same'` | SECMEC 7 DES encrypted password plaintext encoding: `'same'`, `'utf8'`, or `'ebcdic'`; AES uses UTF-8/source CCSID |
 | `encryptedPasswordTokenEncoding` | `string` | `'same'` | SECMEC 7 DES password IV/token encoding, based on the user ID: `'same'`, `'utf8'`, or `'ebcdic'`; AES uses the server security token |

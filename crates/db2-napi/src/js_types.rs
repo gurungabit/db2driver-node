@@ -103,7 +103,7 @@ fn parse_encryption_algorithm(
     value: Option<String>,
 ) -> napi::Result<db2_client::EncryptionAlgorithm> {
     let Some(value) = value else {
-        return Ok(db2_client::EncryptionAlgorithm::Des);
+        return Ok(db2_client::EncryptionAlgorithm::Aes);
     };
 
     let normalized: String = value
@@ -345,7 +345,7 @@ mod tests {
     fn encryption_algorithm_parser_accepts_public_aliases() {
         assert_eq!(
             parse_encryption_algorithm(None).unwrap(),
-            db2_client::EncryptionAlgorithm::Des
+            db2_client::EncryptionAlgorithm::Aes
         );
         assert_eq!(
             parse_encryption_algorithm(Some("AES-256".into())).unwrap(),

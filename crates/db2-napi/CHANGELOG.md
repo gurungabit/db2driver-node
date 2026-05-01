@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.9](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.9) (2026-05-01)
+
+### Bug Fixes
+
+- default JS encrypted authentication to AES for the current Db2 z/OS/JCC path
+
 ## [0.1.7-zos.8](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.8) (2026-05-01)
 
 ### Bug Fixes
