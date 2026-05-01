@@ -66,6 +66,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `user` | `string` | — | Username |
 | `password` | `string` | — | Password |
 | `securityMechanism` | `string` | `'encrypted'` | DRDA authentication mechanism: `'encrypted'` (SECMEC 9), `'encryptedPassword'` (SECMEC 7), `'userPassword'` (SECMEC 3), or `'userOnly'` (SECMEC 4) |
+| `credentialEncoding` | `string` | `'auto'` | Credential string encoding for `SECCHK`: `'auto'`, `'utf8'`, or `'ebcdic'` |
 | `ssl` | `boolean` | `false` | Enable TLS/SSL |
 | `rejectUnauthorized` | `boolean` | `true` | Verify server certificate (requires `ssl: true`) |
 | `caCert` | `string` | — | Path to CA certificate PEM file |
@@ -196,7 +197,7 @@ const client = new Client({
 
 Use `securityMechanism: 'userPassword'` only with TLS in production, because DRDA itself will not encrypt the credentials for that mechanism. RACF user IDs are commonly uppercase and limited to 8 characters; pass the exact user ID form accepted by DDF. A `SECCHKCD 0x13` failure means DB2 rejected the user ID or password after the security check.
 
-If your JDBC tool is configured with `securityMechanism=7` / `ENCRYPTED_PASSWORD_SECURITY`, use `securityMechanism: 'encryptedPassword'`. That sends the user ID in clear text and encrypts only the password, matching the IBM JCC `SECMEC 7` flow.
+If your JDBC tool is configured with `securityMechanism=7` / `ENCRYPTED_PASSWORD_SECURITY`, use `securityMechanism: 'encryptedPassword'`. That sends the user ID in clear text and encrypts only the password, matching the IBM JCC `SECMEC 7` flow. Credential bytes default to `credentialEncoding: 'auto'`, which follows the server's negotiated Unicode manager; set `credentialEncoding: 'utf8'` or `'ebcdic'` to override it while diagnosing z/OS authentication.
 
 ## Server Info
 

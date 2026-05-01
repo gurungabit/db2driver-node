@@ -9,6 +9,7 @@ pub struct Config {
     pub user: String,
     pub password: String,
     pub security_mechanism: SecurityMechanism,
+    pub credential_encoding: CredentialEncoding,
     pub ssl: bool,
     pub ssl_config: Option<SslConfig>,
     pub connect_timeout: Duration,
@@ -29,6 +30,17 @@ pub enum SecurityMechanism {
     UserPassword,
     /// User ID only (DRDA SECMEC 4).
     UserOnly,
+}
+
+/// Encoding to use for DRDA credential string bytes in SECCHK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialEncoding {
+    /// Follow the server's negotiated Unicode manager support.
+    Auto,
+    /// EBCDIC code page 037.
+    Ebcdic037,
+    /// UTF-8.
+    Utf8,
 }
 
 /// TLS/SSL configuration options.
@@ -60,6 +72,7 @@ impl Default for Config {
             user: String::new(),
             password: String::new(),
             security_mechanism: SecurityMechanism::EncryptedUserPassword,
+            credential_encoding: CredentialEncoding::Auto,
             ssl: false,
             ssl_config: None,
             connect_timeout: Duration::from_secs(30),

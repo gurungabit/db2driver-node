@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use tracing::{debug, trace, warn};
 
-use crate::config::{Config, SecurityMechanism};
+use crate::config::{Config, CredentialEncoding, SecurityMechanism};
 use crate::error::Error;
 use crate::transport::Transport;
 use db2_proto::codepoints;
@@ -98,6 +98,7 @@ pub async fn authenticate(
             exsatrd_obj.code_point
         )));
     }
+    let credential_encoding = effective_credential_encoding(config, &server_info);
 
     // Parse ACCSECRD — get server's accepted mechanism and SECTKN
     let accsecrd_frame = &frames[1];
@@ -140,6 +141,7 @@ pub async fn authenticate(
         server_sectkn.as_deref(),
         &client_private,
         config,
+        credential_encoding,
     )?;
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
 
@@ -157,12 +159,13 @@ pub async fn authenticate(
     let send_buf = writer.finish();
     transport.write_bytes(&send_buf).await?;
     debug!(
-        "Sent {}SECCHK + ACCRDB",
+        "Sent {}SECCHK + ACCRDB using {:?} credential encoding",
         if renegotiate_security {
             "ACCSEC + "
         } else {
             ""
-        }
+        },
+        credential_encoding
     );
 
     // Read phase 2 responses: optional ACCSECRD, SECCHKRM, ACCRDBRM/SQLCARD.
@@ -217,11 +220,12 @@ pub async fn authenticate(
                 saw_secchkrm = true;
                 if !reply.is_success() {
                     return Err(Error::Auth(format!(
-                        "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}",
+                        "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}, credential_encoding={:?}",
                         reply.severity_code,
                         format_security_check_code(reply.security_check_code),
                         requested_secmec,
-                        accepted_secmec
+                        accepted_secmec,
+                        credential_encoding
                     )));
                 }
                 debug!("Security check passed");
@@ -360,6 +364,7 @@ fn build_secchk_for_mechanism(
     server_sectkn: Option<&[u8]>,
     client_private: &[u8],
     config: &Config,
+    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD => {
@@ -368,12 +373,13 @@ fn build_secchk_for_mechanism(
                     "ACCSECRD selected encrypted authentication but did not include SECTKN".into(),
                 )
             })?;
-            db2_proto::commands::secchk::build_secchk_eusridpwd(
+            db2_proto::commands::secchk::build_secchk_eusridpwd_with_encoding(
                 &config.database,
                 &config.user,
                 &config.password,
                 server_sectkn,
                 client_private,
+                credential_encoding,
             )
             .map_err(Error::from)
         }
@@ -384,32 +390,70 @@ fn build_secchk_for_mechanism(
                         .into(),
                 )
             })?;
-            db2_proto::commands::secchk::build_secchk_usencpwd(
+            db2_proto::commands::secchk::build_secchk_usencpwd_with_encoding(
                 &config.database,
                 &config.user,
                 &config.password,
                 server_sectkn,
                 client_private,
+                credential_encoding,
             )
             .map_err(Error::from)
         }
-        codepoints::SECMEC_USRIDPWD => Ok(db2_proto::commands::secchk::build_secchk_usridpwd(
-            &config.database,
-            &config.user,
-            &config.password,
-        )),
+        codepoints::SECMEC_USRIDPWD => Ok(
+            db2_proto::commands::secchk::build_secchk_usridpwd_with_encoding(
+                &config.database,
+                &config.user,
+                &config.password,
+                credential_encoding,
+            ),
+        ),
         codepoints::SECMEC_USRIDONL => {
             let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::SECCHK);
             ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_USRIDONL);
-            ddm.add_code_point(
-                codepoints::USRID,
-                &db2_proto::codepage::utf8_to_ebcdic037(&config.user),
-            );
+            let user_id = encode_credential(&config.user, credential_encoding);
+            ddm.add_code_point(codepoints::USRID, &user_id);
             Ok(ddm.build())
         }
         other => Err(Error::Auth(format!(
             "Server selected unsupported DRDA security mechanism 0x{other:04X}"
         ))),
+    }
+}
+
+fn effective_credential_encoding(
+    config: &Config,
+    server_info: &ServerInfo,
+) -> db2_proto::commands::secchk::CredentialEncoding {
+    match config.credential_encoding {
+        CredentialEncoding::Ebcdic037 => db2_proto::commands::secchk::CredentialEncoding::Ebcdic037,
+        CredentialEncoding::Utf8 => db2_proto::commands::secchk::CredentialEncoding::Utf8,
+        CredentialEncoding::Auto => {
+            if server_supports_utf8_credentials(server_info) {
+                db2_proto::commands::secchk::CredentialEncoding::Utf8
+            } else {
+                db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
+            }
+        }
+    }
+}
+
+fn server_supports_utf8_credentials(server_info: &ServerInfo) -> bool {
+    server_info
+        .manager_levels
+        .iter()
+        .any(|(code_point, level)| *code_point == codepoints::UNICODEMGR && *level == 1208)
+}
+
+fn encode_credential(
+    value: &str,
+    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
+) -> Vec<u8> {
+    match credential_encoding {
+        db2_proto::commands::secchk::CredentialEncoding::Ebcdic037 => {
+            db2_proto::codepage::utf8_to_ebcdic037(value)
+        }
+        db2_proto::commands::secchk::CredentialEncoding::Utf8 => value.as_bytes().to_vec(),
     }
 }
 
@@ -621,5 +665,36 @@ mod tests {
             .unwrap();
         let (clear_obj, _) = DdmObject::parse(&clear).unwrap();
         assert!(clear_obj.find_param(codepoints::SECTKN).is_none());
+    }
+
+    #[test]
+    fn auto_credential_encoding_uses_utf8_when_unicode_manager_is_negotiated() {
+        let config = Config::default();
+        let mut server_info = ServerInfo::default();
+        server_info
+            .manager_levels
+            .push((codepoints::UNICODEMGR, 1208));
+
+        assert_eq!(
+            effective_credential_encoding(&config, &server_info),
+            db2_proto::commands::secchk::CredentialEncoding::Utf8
+        );
+    }
+
+    #[test]
+    fn explicit_credential_encoding_overrides_server_managers() {
+        let config = Config {
+            credential_encoding: CredentialEncoding::Ebcdic037,
+            ..Default::default()
+        };
+        let mut server_info = ServerInfo::default();
+        server_info
+            .manager_levels
+            .push((codepoints::UNICODEMGR, 1208));
+
+        assert_eq!(
+            effective_credential_encoding(&config, &server_info),
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
+        );
     }
 }

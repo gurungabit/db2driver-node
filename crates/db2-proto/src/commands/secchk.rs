@@ -4,6 +4,24 @@ use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 use crate::{ProtoError, Result};
 
+/// Encoding for credential string bytes sent in SECCHK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialEncoding {
+    /// EBCDIC code page 037.
+    Ebcdic037,
+    /// UTF-8.
+    Utf8,
+}
+
+impl CredentialEncoding {
+    fn encode(self, value: &str) -> Vec<u8> {
+        match self {
+            CredentialEncoding::Ebcdic037 => utf8_to_ebcdic037(value),
+            CredentialEncoding::Utf8 => value.as_bytes().to_vec(),
+        }
+    }
+}
+
 /// Build a SECCHK DDM command with user ID, password, and database name.
 ///
 /// Parameters:
@@ -35,10 +53,25 @@ pub fn build_secchk_without_rdbnam(
     user_id: &str,
     password: &str,
 ) -> Vec<u8> {
+    build_secchk_without_rdbnam_with_encoding(
+        security_mechanism,
+        user_id,
+        password,
+        CredentialEncoding::Ebcdic037,
+    )
+}
+
+/// Build a SECCHK DDM command with encoded user ID and password credentials.
+pub fn build_secchk_without_rdbnam_with_encoding(
+    security_mechanism: u16,
+    user_id: &str,
+    password: &str,
+    credential_encoding: CredentialEncoding,
+) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(SECCHK);
     ddm.add_u16(SECMEC, security_mechanism);
-    ddm.add_code_point(USRID, &utf8_to_ebcdic037(user_id));
-    ddm.add_code_point(PASSWORD, &utf8_to_ebcdic037(password));
+    ddm.add_code_point(USRID, &credential_encoding.encode(user_id));
+    ddm.add_code_point(PASSWORD, &credential_encoding.encode(password));
     ddm.build()
 }
 
@@ -48,6 +81,21 @@ pub fn build_secchk_without_rdbnam(
 /// in SECCHK because the database name is already sent in ACCSEC/ACCRDB.
 pub fn build_secchk_usridpwd(_rdbnam: &str, user_id: &str, password: &str) -> Vec<u8> {
     build_secchk_without_rdbnam(SECMEC_USRIDPWD, user_id, password)
+}
+
+/// Build SECCHK for user ID + password authentication with encoded credentials.
+pub fn build_secchk_usridpwd_with_encoding(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    credential_encoding: CredentialEncoding,
+) -> Vec<u8> {
+    build_secchk_without_rdbnam_with_encoding(
+        SECMEC_USRIDPWD,
+        user_id,
+        password,
+        credential_encoding,
+    )
 }
 
 /// Build SECCHK for encrypted user ID + password authentication (SECMEC 0x0009).
@@ -63,6 +111,25 @@ pub fn build_secchk_eusridpwd(
     server_sectkn: &[u8],
     client_private: &[u8],
 ) -> Result<Vec<u8>> {
+    build_secchk_eusridpwd_with_encoding(
+        _rdbnam,
+        user_id,
+        password,
+        server_sectkn,
+        client_private,
+        CredentialEncoding::Ebcdic037,
+    )
+}
+
+/// Build SECCHK for encrypted user ID + password authentication with encoded credentials.
+pub fn build_secchk_eusridpwd_with_encoding(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    server_sectkn: &[u8],
+    client_private: &[u8],
+    credential_encoding: CredentialEncoding,
+) -> Result<Vec<u8>> {
     if server_sectkn.len() != 32 {
         return Err(ProtoError::Other(format!(
             "ACCSECRD returned an invalid SECTKN for encrypted authentication: expected 32 bytes, got {}",
@@ -71,9 +138,12 @@ pub fn build_secchk_eusridpwd(
     }
 
     let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
-    let encrypted_user_id = crate::secmec9::encrypt_userid(&session_key, server_sectkn, user_id);
+    let encoded_user_id = credential_encoding.encode(user_id);
+    let encoded_password = credential_encoding.encode(password);
+    let encrypted_user_id =
+        crate::secmec9::encrypt_userid_bytes(&session_key, server_sectkn, &encoded_user_id);
     let encrypted_password =
-        crate::secmec9::encrypt_password(&session_key, server_sectkn, password);
+        crate::secmec9::encrypt_password_bytes(&session_key, server_sectkn, &encoded_password);
 
     let mut ddm = DdmBuilder::new(SECCHK);
     ddm.add_u16(SECMEC, SECMEC_EUSRIDPWD);
@@ -94,6 +164,25 @@ pub fn build_secchk_usencpwd(
     server_sectkn: &[u8],
     client_private: &[u8],
 ) -> Result<Vec<u8>> {
+    build_secchk_usencpwd_with_encoding(
+        _rdbnam,
+        user_id,
+        password,
+        server_sectkn,
+        client_private,
+        CredentialEncoding::Ebcdic037,
+    )
+}
+
+/// Build SECCHK for user ID + encrypted password authentication with encoded credentials.
+pub fn build_secchk_usencpwd_with_encoding(
+    _rdbnam: &str,
+    user_id: &str,
+    password: &str,
+    server_sectkn: &[u8],
+    client_private: &[u8],
+    credential_encoding: CredentialEncoding,
+) -> Result<Vec<u8>> {
     if server_sectkn.len() != 32 {
         return Err(ProtoError::Other(format!(
             "ACCSECRD returned an invalid SECTKN for encrypted password authentication: expected 32 bytes, got {}",
@@ -102,12 +191,17 @@ pub fn build_secchk_usencpwd(
     }
 
     let session_key = crate::secmec9::calculate_session_key(server_sectkn, client_private);
-    let encrypted_password =
-        crate::secmec9::encrypt_password_with_userid_iv(&session_key, user_id, password);
+    let encoded_user_id = credential_encoding.encode(user_id);
+    let encoded_password = credential_encoding.encode(password);
+    let encrypted_password = crate::secmec9::encrypt_password_with_userid_iv_bytes(
+        &session_key,
+        &encoded_user_id,
+        &encoded_password,
+    );
 
     let mut ddm = DdmBuilder::new(SECCHK);
     ddm.add_u16(SECMEC, SECMEC_USRENCPWD);
-    ddm.add_code_point(USRID, &utf8_to_ebcdic037(user_id));
+    ddm.add_code_point(USRID, &encoded_user_id);
     ddm.add_code_point(SECTKN, &encrypted_password);
     Ok(ddm.build())
 }
@@ -183,5 +277,33 @@ mod tests {
         assert!(params.iter().any(|p| p.code_point == USRID));
         assert_eq!(params.iter().filter(|p| p.code_point == SECTKN).count(), 1);
         assert!(!params.iter().any(|p| p.code_point == PASSWORD));
+    }
+
+    #[test]
+    fn test_build_secchk_usencpwd_utf8_credentials() {
+        let client_private = crate::secmec9::generate_private_key();
+        let server_private = crate::secmec9::generate_private_key();
+        let server_public = crate::secmec9::calculate_public_key(&server_private);
+
+        let bytes = build_secchk_usencpwd_with_encoding(
+            "testdb",
+            "db2inst1",
+            "password123",
+            &server_public,
+            &client_private,
+            CredentialEncoding::Utf8,
+        )
+        .unwrap();
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let user = obj.find_param(USRID).expect("USRID should be present");
+
+        assert_eq!(user.data, b"db2inst1");
+        assert_eq!(
+            obj.parameters()
+                .iter()
+                .filter(|p| p.code_point == SECTKN)
+                .count(),
+            1
+        );
     }
 }
