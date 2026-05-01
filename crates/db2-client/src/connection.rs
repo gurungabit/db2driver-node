@@ -21,7 +21,6 @@ use db2_proto::dss::{DssFrame, DssReader, DssWriter};
 
 pub(crate) const DIRECT_QUERY_PKGID: &str = db2_proto::commands::DEFAULT_PKGID;
 pub(crate) const DIRECT_QUERY_SECTION: u16 = 65;
-pub(crate) const ZOS_DIRECT_QUERY_SECTION: u16 = 4;
 // DB2 CLI binds large placeholder packages as SYSLHxyy. Using the first one gives
 // long-lived prepared statements their own section space instead of colliding with
 // the one-shot section we keep for direct query()/execute() calls.
@@ -77,43 +76,18 @@ impl ClientInner {
     }
 
     pub fn direct_query_pkgnamcsn(&mut self) -> Vec<u8> {
-        let section_number = if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
-            ZOS_DIRECT_QUERY_SECTION
-        } else {
-            DIRECT_QUERY_SECTION
-        };
-        self.activate_section(DIRECT_QUERY_PKGID, section_number);
-        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, section_number)
+        self.activate_section(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION);
+        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION)
     }
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
-        if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
-            let rdbnam = self.zos_package_rdb_name();
-            db2_proto::commands::build_pkgnamcsn_ebcdic_names(
-                &rdbnam,
-                db2_proto::commands::DEFAULT_RDBCOLID,
-                package_id,
-                &db2_proto::commands::DEFAULT_PKGCNSTKN,
-                section_number,
-            )
-        } else {
-            db2_proto::commands::build_pkgnamcsn(
-                &self.config.database,
-                db2_proto::commands::DEFAULT_RDBCOLID,
-                package_id,
-                &db2_proto::commands::DEFAULT_PKGCNSTKN,
-                section_number,
-            )
-        }
-    }
-
-    fn zos_package_rdb_name(&self) -> String {
-        self.server_info
-            .as_ref()
-            .map(|info| info.product_name.trim())
-            .filter(|name| !name.is_empty())
-            .unwrap_or(self.config.database.trim())
-            .to_string()
+        db2_proto::commands::build_pkgnamcsn(
+            &self.config.database,
+            db2_proto::commands::DEFAULT_RDBCOLID,
+            package_id,
+            &db2_proto::commands::DEFAULT_PKGCNSTKN,
+            section_number,
+        )
     }
 
     pub fn allocate_prepared_section(&mut self) -> Result<u16, Error> {
@@ -575,9 +549,7 @@ impl ClientInner {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
                     ddm.add_u32(codepoints::QRYBLKSZ, qryblksz);
-                    if !use_zos_sqlstt {
-                        ddm.add_u16(codepoints::MAXBLKEXT, qryblksz as u16);
-                    }
+                    ddm.add_u16(codepoints::MAXBLKEXT, qryblksz as u16);
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()
                 };

@@ -52,7 +52,13 @@ impl Cursor {
         }
 
         let corr_id = inner.next_correlation_id();
-        let pkgnamcsn = inner.build_pkgnamcsn_for(inner.package_id, inner.section_number);
+        let pkgnamcsn = db2_proto::commands::build_pkgnamcsn(
+            &inner.config.database,
+            db2_proto::commands::DEFAULT_RDBCOLID,
+            inner.package_id,
+            &db2_proto::commands::DEFAULT_PKGCNSTKN,
+            inner.section_number,
+        );
 
         let cntqry_data = db2_proto::commands::cntqry::build_cntqry(
             &pkgnamcsn,
