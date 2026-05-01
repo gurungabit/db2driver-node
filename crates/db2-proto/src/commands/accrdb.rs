@@ -22,9 +22,8 @@ pub const DEFAULT_PRDID: &str = "SQL11014";
 
 /// Default DRDA type definition name.
 ///
-/// IBM JCC uses QTDSQLASC for UTF-8/source-CCSID DRDA clients. Db2 for z/OS
-/// can reject QTDSQLX86 during ACCRDB with VALNSPRM on TYPDEFNAM.
-pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLASC";
+/// Default to the z/OS-native type definition for DDF compatibility.
+pub const DEFAULT_TYPDEFNAM: &str = "QTDSQL370";
 
 /// Default CCSID values.
 pub const DEFAULT_CCSID_SBC: u16 = 1208; // UTF-8 single-byte

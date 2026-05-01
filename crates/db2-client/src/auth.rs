@@ -196,7 +196,18 @@ pub async fn authenticate(
         credential_options,
         &accsecrd_detail,
     )?;
-    let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
+    let type_definition_name = config
+        .type_definition_name
+        .as_deref()
+        .unwrap_or(db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM);
+    let accrdb_data = db2_proto::commands::accrdb::build_accrdb(
+        &config.database,
+        db2_proto::commands::accrdb::DEFAULT_PRDID,
+        type_definition_name,
+        db2_proto::commands::accrdb::DEFAULT_CCSID_SBC,
+        db2_proto::commands::accrdb::DEFAULT_CCSID_DBC,
+        db2_proto::commands::accrdb::DEFAULT_CCSID_MBC,
+    );
 
     let mut writer = DssWriter::new(1);
     if renegotiate_security {

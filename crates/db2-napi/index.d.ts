@@ -21,6 +21,7 @@ export interface JsConnectionConfig {
   queryTimeout?: number
   frameDrainTimeout?: number
   currentSchema?: string
+  typeDefinitionName?: string
   fetchSize?: number
 }
 export interface JsQueryResult {
@@ -57,6 +58,7 @@ export interface JsPoolConfig {
   queryTimeout?: number
   frameDrainTimeout?: number
   currentSchema?: string
+  typeDefinitionName?: string
   fetchSize?: number
   minConnections?: number
   maxConnections?: number

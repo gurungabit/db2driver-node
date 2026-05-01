@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.12](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.12) (2026-05-01)
+
+### Bug Fixes
+
+- default ACCRDB to QTDSQL370 and expose typeDefinitionName for z/OS TYPDEFNAM testing
+
 ## [0.1.7-zos.11](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.11) (2026-05-01)
 
 ### Bug Fixes

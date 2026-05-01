@@ -20,6 +20,7 @@ pub fn config_from_js(
     query_timeout: Option<u32>,
     frame_drain_timeout: Option<u32>,
     current_schema: Option<String>,
+    type_definition_name: Option<String>,
     fetch_size: Option<u32>,
 ) -> napi::Result<db2_client::Config> {
     let mut config = db2_client::Config {
@@ -58,6 +59,7 @@ pub fn config_from_js(
         config.frame_drain_timeout = std::time::Duration::from_millis(fd as u64);
     }
     config.current_schema = current_schema;
+    config.type_definition_name = parse_type_definition_name(type_definition_name)?;
     if let Some(fs) = fetch_size {
         config.fetch_size = fs;
     }
@@ -179,6 +181,22 @@ fn parse_encrypted_password_encoding(
         }
         _ => Err(napi::Error::from_reason(format!(
             "Unsupported encrypted password encoding '{}'. Use 'same', 'utf8', or 'ebcdic'.",
+            value
+        ))),
+    }
+}
+
+fn parse_type_definition_name(value: Option<String>) -> napi::Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let normalized: String = value.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "" => Ok(None),
+        "QTDSQL370" | "QTDSQLASC" | "QTDSQLX86" | "QTDSQL400" => Ok(Some(normalized)),
+        _ => Err(napi::Error::from_reason(format!(
+            "Unsupported typeDefinitionName '{}'. Use 'QTDSQL370', 'QTDSQLASC', 'QTDSQLX86', or 'QTDSQL400'.",
             value
         ))),
     }
@@ -377,5 +395,19 @@ mod tests {
             db2_client::EncryptedPasswordEncoding::Ebcdic037
         );
         assert!(parse_encrypted_password_encoding(Some("unsupported".into())).is_err());
+    }
+
+    #[test]
+    fn type_definition_name_parser_accepts_supported_names() {
+        assert_eq!(parse_type_definition_name(None).unwrap(), None);
+        assert_eq!(
+            parse_type_definition_name(Some(" qtdsqlasc ".into())).unwrap(),
+            Some("QTDSQLASC".into())
+        );
+        assert_eq!(
+            parse_type_definition_name(Some("QTDSQL370".into())).unwrap(),
+            Some("QTDSQL370".into())
+        );
+        assert!(parse_type_definition_name(Some("unsupported".into())).is_err());
     }
 }

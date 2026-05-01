@@ -24,6 +24,7 @@ pub struct JsPoolConfig {
     pub query_timeout: Option<u32>,
     pub frame_drain_timeout: Option<u32>,
     pub current_schema: Option<String>,
+    pub type_definition_name: Option<String>,
     pub fetch_size: Option<u32>,
     pub min_connections: Option<u32>,
     pub max_connections: Option<u32>,
@@ -59,6 +60,7 @@ impl JsPool {
             config.query_timeout,
             config.frame_drain_timeout,
             config.current_schema.clone(),
+            config.type_definition_name.clone(),
             config.fetch_size,
         )?;
 

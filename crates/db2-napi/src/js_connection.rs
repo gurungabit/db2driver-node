@@ -24,6 +24,7 @@ pub struct JsConnectionConfig {
     pub query_timeout: Option<u32>,
     pub frame_drain_timeout: Option<u32>,
     pub current_schema: Option<String>,
+    pub type_definition_name: Option<String>,
     pub fetch_size: Option<u32>,
 }
 
@@ -79,6 +80,7 @@ impl JsClient {
             config.query_timeout,
             config.frame_drain_timeout,
             config.current_schema,
+            config.type_definition_name,
             config.fetch_size,
         )?;
         Ok(JsClient {

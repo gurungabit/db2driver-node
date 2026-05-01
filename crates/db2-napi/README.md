@@ -77,6 +77,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `queryTimeout` | `number` | `0` | Query execution timeout in ms (0 = no timeout) |
 | `frameDrainTimeout` | `number` | `500` | Time in ms to wait for follow-up DRDA reply frames |
 | `currentSchema` | `string` | — | Default schema for unqualified table names |
+| `typeDefinitionName` | `string` | `'QTDSQL370'` | DRDA data representation for ACCRDB: `'QTDSQL370'`, `'QTDSQLASC'`, `'QTDSQLX86'`, or `'QTDSQL400'` |
 | `fetchSize` | `number` | `100` | Rows fetched per network round-trip |
 
 ## Pool

@@ -20,6 +20,7 @@ pub struct Config {
     pub frame_drain_timeout: Duration,
     pub fetch_size: u32,
     pub current_schema: Option<String>,
+    pub type_definition_name: Option<String>,
 }
 
 /// DRDA security mechanism to request during authentication.
@@ -106,6 +107,7 @@ impl Default for Config {
             frame_drain_timeout: Duration::from_millis(500),
             fetch_size: 100,
             current_schema: None,
+            type_definition_name: None,
         }
     }
 }
