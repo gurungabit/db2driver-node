@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.6](https://github.com/gurungabit/db2-node/compare/v0.1.5...v0.1.6) (2026-05-01)
+
+
+### Bug Fixes
+
+* support configurable db2 security mechanism ([cc11e61](https://github.com/gurungabit/db2-node/commit/cc11e61d7316a8ddc0fc04e38fb725c3051af97a))
+
 ## [0.1.5](https://github.com/gurungabit/db2-node/compare/v0.1.4...v0.1.5) (2026-05-01)
 
 
