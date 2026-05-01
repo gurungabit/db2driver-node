@@ -7,7 +7,7 @@ use crate::ddm::DdmBuilder;
 ///
 /// Parameters:
 ///   - security_mechanism: Security mechanism code (e.g., SECMEC_USRIDPWD)
-///   - rdbnam: Database name (will be EBCDIC-encoded and padded to 18 bytes)
+///   - rdbnam: Database/location name (will be EBCDIC-encoded)
 pub fn build_accsec(security_mechanism: u16, rdbnam: &str) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(ACCSEC);
     ddm.add_u16(SECMEC, security_mechanism);
@@ -54,6 +54,6 @@ mod tests {
         let secmec_param = params.iter().find(|p| p.code_point == SECMEC).unwrap();
         assert_eq!(secmec_param.as_u16().unwrap(), SECMEC_USRIDPWD);
         let rdbnam_param = params.iter().find(|p| p.code_point == RDBNAM).unwrap();
-        assert_eq!(rdbnam_param.data.len(), 18);
+        assert_eq!(rdbnam_param.data.len(), 6);
     }
 }

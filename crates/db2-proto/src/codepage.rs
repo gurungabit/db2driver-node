@@ -100,8 +100,8 @@ pub fn utf8_to_ebcdic037(input: &str) -> Vec<u8> {
     out
 }
 
-/// Convert a database name to EBCDIC 037 and right-pad with EBCDIC spaces (0x40)
-/// to exactly 18 bytes, as required by DRDA RDBNAM encoding.
+/// Convert a string to EBCDIC 037 and right-pad with EBCDIC spaces (0x40)
+/// to exactly `length` bytes.
 pub fn pad_ebcdic(name: &str, length: usize) -> Vec<u8> {
     let mut ebcdic = utf8_to_ebcdic037(name);
     ebcdic.truncate(length);
@@ -111,11 +111,13 @@ pub fn pad_ebcdic(name: &str, length: usize) -> Vec<u8> {
     ebcdic
 }
 
-/// Convenience wrapper: convert a database name to EBCDIC and pad to 18 bytes.
+/// Encode a DRDA RDBNAM.
+///
+/// Db2 for z/OS location names are limited to 16 bytes and can reject padded
+/// 18-byte values. Send the actual trimmed name length instead of padding.
 pub fn pad_rdbnam(db_name: &str) -> Vec<u8> {
-    // Db2 for z/OS rejects RDBNAM with VALNSPRM when bytes 17-18 are non-blank.
-    let mut rdbnam = pad_ebcdic(db_name, 16);
-    rdbnam.resize(18, 0x40);
+    let mut rdbnam = utf8_to_ebcdic037(db_name.trim());
+    rdbnam.truncate(16);
     rdbnam
 }
 
@@ -150,18 +152,25 @@ mod tests {
     #[test]
     fn test_pad_rdbnam() {
         let padded = pad_rdbnam("TESTDB");
-        assert_eq!(padded.len(), 18);
+        assert_eq!(padded.len(), 6);
         // First 6 bytes should be EBCDIC for "TESTDB"
         let back = ebcdic037_to_utf8(&padded);
-        assert_eq!(back, "TESTDB            ");
+        assert_eq!(back, "TESTDB");
     }
 
     #[test]
-    fn test_pad_rdbnam_keeps_zos_reserved_bytes_blank() {
+    fn test_pad_rdbnam_limits_zos_name_to_sixteen_bytes() {
         let padded = pad_rdbnam("ABCDEFGHIJKLMNOPQR");
-        assert_eq!(padded.len(), 18);
+        assert_eq!(padded.len(), 16);
 
         let back = ebcdic037_to_utf8(&padded);
-        assert_eq!(back, "ABCDEFGHIJKLMNOP  ");
+        assert_eq!(back, "ABCDEFGHIJKLMNOP");
+    }
+
+    #[test]
+    fn test_pad_rdbnam_trims_outer_whitespace() {
+        let padded = pad_rdbnam(" DDFIC0A ");
+        let back = ebcdic037_to_utf8(&padded);
+        assert_eq!(back, "DDFIC0A");
     }
 }

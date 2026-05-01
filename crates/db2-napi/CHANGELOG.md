@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.10](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.10) (2026-05-01)
+
+### Bug Fixes
+
+- send z/OS RDBNAM as the trimmed location-name length instead of an 18-byte padded value
+
 ## [0.1.7-zos.9](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.9) (2026-05-01)
 
 ### Bug Fixes
