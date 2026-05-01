@@ -59,6 +59,7 @@ pub const RDBRLLBCK: u16 = 0x200F; // RDB Rollback Unit of Work
 pub const SQLCARD: u16 = 0x2408; // SQL Communications Area Reply Data
 pub const SQLDARD: u16 = 0x2411; // SQL Descriptor Area Reply Data
 pub const SQLDTA: u16 = 0x2412; // SQL Program Variable Data
+pub const SQLATTR: u16 = 0x2450; // SQL Statement Attributes
 pub const SQLSTT: u16 = 0x2414; // SQL Statement
 pub const QRYDSC: u16 = 0x241A; // Query Answer Set Description
 pub const QRYDTA: u16 = 0x241B; // Query Answer Set Data

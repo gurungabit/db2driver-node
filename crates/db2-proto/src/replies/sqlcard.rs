@@ -116,8 +116,9 @@ pub fn parse_sqlcard_data(data: &[u8]) -> Result<SqlCard> {
 
     let mut offset = 1;
 
-    // SQLCODE: 4 bytes little-endian i32 (when using QTDSQLX86 TYPDEFNAM)
-    let sqlcode = i32::from_le_bytes([
+    // SQLCODE: LUW/QTDSQLX86 replies are little-endian; z/OS/QTDSQLASC
+    // replies are big-endian. Pick the plausible decoded value.
+    let sqlcode = decode_i32_auto([
         data[offset],
         data[offset + 1],
         data[offset + 2],
@@ -224,6 +225,19 @@ pub fn parse_sqlcard_data(data: &[u8]) -> Result<SqlCard> {
     })
 }
 
+fn decode_i32_auto(bytes: [u8; 4]) -> i32 {
+    let le = i32::from_le_bytes(bytes);
+    let be = i32::from_be_bytes(bytes);
+    let le_plausible = le.unsigned_abs() <= 100_000;
+    let be_plausible = be.unsigned_abs() <= 100_000;
+
+    match (le_plausible, be_plausible) {
+        (true, false) => le,
+        (false, true) => be,
+        _ => le,
+    }
+}
+
 fn decode_len_prefixed_string(data: &[u8], offset: usize) -> Result<(String, usize)> {
     if offset + 2 > data.len() {
         return Err(ProtoError::BufferTooShort {
@@ -277,5 +291,19 @@ mod tests {
         assert!(!card.is_null);
         assert_eq!(card.sqlcode, 100);
         assert!(card.is_warning());
+    }
+
+    #[test]
+    fn test_sqlcard_decodes_zos_big_endian_sqlcode() {
+        let mut data = Vec::new();
+        data.push(0x00);
+        data.extend_from_slice(&(-804i32).to_be_bytes());
+        data.extend_from_slice(b"07002");
+        data.extend_from_slice(b"DSNXECP ");
+        data.push(0xFF);
+
+        let card = parse_sqlcard_data(&data).unwrap();
+        assert_eq!(card.sqlcode, -804);
+        assert_eq!(card.sqlstate, "07002");
     }
 }

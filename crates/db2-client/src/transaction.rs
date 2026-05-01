@@ -108,9 +108,19 @@ impl Transaction {
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
+            let use_zos_cursor_attributes = crate::connection::sql_is_query(sql)
+                && guard
+                    .server_info
+                    .as_ref()
+                    .map_or(false, crate::connection::is_db2_zos_server);
 
             let mut writer = db2_proto::dss::DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
+            if use_zos_cursor_attributes {
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+                writer.write_object_same_corr(&sqlattr_data, true);
+            }
             writer.write_object(&sqlstt_data, false);
 
             let send_buf = writer.finish();

@@ -12,6 +12,7 @@ pub mod prpsqlstt;
 pub mod rdbcmm;
 pub mod rdbrllbck;
 pub mod secchk;
+pub mod sqlattr;
 pub mod sqlstt;
 
 /// Default package collection ID (EBCDIC padded to 18 bytes).

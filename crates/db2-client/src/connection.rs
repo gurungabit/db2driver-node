@@ -490,6 +490,8 @@ impl ClientInner {
         debug!("Execute query with {} params: {}", params.len(), sql);
 
         let is_query = sql_is_query(sql);
+        let use_zos_cursor_attributes =
+            is_query && self.server_info.as_ref().map_or(false, is_db2_zos_server);
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         let mut input_descriptors = Vec::new();
 
@@ -504,6 +506,11 @@ impl ClientInner {
             let qryblksz: u32 = 0x0000FFFF;
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
+            if use_zos_cursor_attributes {
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+                writer.write_object_same_corr(&sqlattr_data, true);
+            }
             writer.write_object(&sqlstt_data, false);
 
             let send_buf = writer.finish();
@@ -564,6 +571,11 @@ impl ClientInner {
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
+            if use_zos_cursor_attributes {
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+                writer.write_object_same_corr(&sqlattr_data, true);
+            }
             writer.write_object(&sqlstt_data, false);
 
             let send_buf = writer.finish();
@@ -1267,9 +1279,16 @@ impl Client {
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
+            let use_zos_cursor_attributes =
+                sql_is_query(sql) && guard.server_info.as_ref().map_or(false, is_db2_zos_server);
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
+            if use_zos_cursor_attributes {
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+                writer.write_object_same_corr(&sqlattr_data, true);
+            }
             writer.write_object(&sqlstt_data, false);
 
             let send_buf = writer.finish();
@@ -1413,7 +1432,7 @@ pub(crate) fn ensure_sqlstt_sql_len(sql: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn is_db2_zos_server(server_info: &ServerInfo) -> bool {
+pub(crate) fn is_db2_zos_server(server_info: &ServerInfo) -> bool {
     [&server_info.server_release, &server_info.server_class]
         .iter()
         .any(|value| value.trim_start().to_ascii_uppercase().starts_with("DSN"))
@@ -2406,7 +2425,7 @@ fn format_hex_preview(data: &[u8], max_bytes: usize) -> String {
 }
 
 /// Simple heuristic to determine if a SQL string is a query (SELECT).
-fn sql_is_query(sql: &str) -> bool {
+pub(crate) fn sql_is_query(sql: &str) -> bool {
     let trimmed = sql.trim().to_uppercase();
     trimmed.starts_with("SELECT")
         || trimmed.starts_with("WITH")
