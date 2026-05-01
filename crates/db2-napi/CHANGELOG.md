@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.26](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.26) (2026-05-01)
+
+### Bug Fixes
+
+- send z/OS SQLSTT text length without terminator bytes
+
 ## [0.1.7-zos.25](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.25) (2026-05-01)
 
 ### Bug Fixes
