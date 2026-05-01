@@ -852,8 +852,12 @@ pub fn encrypt_userid_bytes_with_algorithm(
 
 /// Encrypt pre-encoded password bytes for DRDA SECMEC 0x0007 authentication
 /// with the selected DRDA encryption algorithm.
+///
+/// DES uses the user ID bytes as the IV. AES follows IBM JCC and uses bytes
+/// 24..40 from the server security token as the IV.
 pub fn encrypt_password_with_userid_iv_bytes_with_algorithm(
     session_key: &[u8],
+    server_sectkn: &[u8],
     userid: &[u8],
     password: &[u8],
     algorithm: EncryptionAlgorithm,
@@ -864,8 +868,7 @@ pub fn encrypt_password_with_userid_iv_bytes_with_algorithm(
         }
         EncryptionAlgorithm::Aes => {
             let mut iv = [0u8; 16];
-            let copy_len = userid.len().min(16);
-            iv[..copy_len].copy_from_slice(&userid[..copy_len]);
+            iv.copy_from_slice(&server_sectkn[24..40]);
             aes_cbc_encrypt(session_key, &iv, password)
         }
     }
@@ -1181,11 +1184,45 @@ mod tests {
 
         let ct2 = encrypt_password_with_userid_iv_bytes_with_algorithm(
             &session_key,
+            &server_sectkn,
             b"APPUSER",
             b"1234567890123456",
             EncryptionAlgorithm::Aes,
         );
         assert_eq!(ct2.len(), 32);
+    }
+
+    #[test]
+    fn test_secmec7_aes_uses_server_token_iv_not_userid_iv() {
+        let session_key = vec![0x11; 64];
+        let server_sectkn_a = vec![0x22; 64];
+        let mut server_sectkn_b = vec![0x22; 64];
+        server_sectkn_b[24] = 0x33;
+
+        let ct_user_a = encrypt_password_with_userid_iv_bytes_with_algorithm(
+            &session_key,
+            &server_sectkn_a,
+            b"APPUSERA",
+            b"password",
+            EncryptionAlgorithm::Aes,
+        );
+        let ct_user_b = encrypt_password_with_userid_iv_bytes_with_algorithm(
+            &session_key,
+            &server_sectkn_a,
+            b"APPUSERB",
+            b"password",
+            EncryptionAlgorithm::Aes,
+        );
+        let ct_server_b = encrypt_password_with_userid_iv_bytes_with_algorithm(
+            &session_key,
+            &server_sectkn_b,
+            b"APPUSERA",
+            b"password",
+            EncryptionAlgorithm::Aes,
+        );
+
+        assert_eq!(ct_user_a, ct_user_b);
+        assert_ne!(ct_user_a, ct_server_b);
     }
 
     #[test]

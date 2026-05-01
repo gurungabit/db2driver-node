@@ -302,6 +302,7 @@ pub fn build_secchk_usencpwd_with_algorithm_and_encodings(
     let password_token = credential_encodings.password_token.encode(user_id);
     let encrypted_password = crate::secmec9::encrypt_password_with_userid_iv_bytes_with_algorithm(
         &session_key,
+        server_sectkn,
         &password_token,
         &encoded_password,
         encryption_algorithm,
