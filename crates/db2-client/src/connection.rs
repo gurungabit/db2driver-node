@@ -88,8 +88,9 @@ impl ClientInner {
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
         if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
+            let rdbnam = self.zos_package_rdb_name();
             db2_proto::commands::build_pkgnamcsn_ebcdic_names(
-                &self.config.database,
+                &rdbnam,
                 db2_proto::commands::DEFAULT_RDBCOLID,
                 package_id,
                 &db2_proto::commands::DEFAULT_PKGCNSTKN,
@@ -104,6 +105,15 @@ impl ClientInner {
                 section_number,
             )
         }
+    }
+
+    fn zos_package_rdb_name(&self) -> String {
+        self.server_info
+            .as_ref()
+            .map(|info| info.product_name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.config.database.trim())
+            .to_string()
     }
 
     pub fn allocate_prepared_section(&mut self) -> Result<u16, Error> {
@@ -541,7 +551,7 @@ impl ClientInner {
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
-            let qryblksz: u32 = if use_zos_sqlstt { 0 } else { 0x0000FFFF };
+            let qryblksz: u32 = 0x0000FFFF;
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);

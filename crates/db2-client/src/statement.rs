@@ -5,7 +5,7 @@ use tokio::time::timeout;
 use tracing::debug;
 
 use crate::column::ColumnInfo;
-use crate::connection::{build_sqldta, is_db2_zos_server, ClientInner};
+use crate::connection::{build_sqldta, ClientInner};
 use crate::error::Error;
 use crate::types::{QueryResult, ToSql};
 use db2_proto::dss::DssWriter;
@@ -72,7 +72,6 @@ impl PreparedStatement {
         );
 
         let is_query = sql_is_query(&self.sql);
-        let use_zos_opnqry = guard.server_info.as_ref().map_or(false, is_db2_zos_server);
         let pkgnamcsn = guard.build_pkgnamcsn_for(self.package_id, self.section_number);
         guard.activate_section(self.package_id, self.section_number);
         let query_timeout = guard.config.query_timeout;
@@ -83,8 +82,7 @@ impl PreparedStatement {
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(db2_proto::codepoints::OPNQRY);
                     ddm.add_code_point(db2_proto::codepoints::PKGNAMCSN, &pkgnamcsn);
-                    let qryblksz = if use_zos_opnqry { 0 } else { 0x0000_FFFF };
-                    ddm.add_u32(db2_proto::codepoints::QRYBLKSZ, qryblksz);
+                    ddm.add_u32(db2_proto::codepoints::QRYBLKSZ, 0x0000_FFFF);
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1
                     ddm.build()
                 };
