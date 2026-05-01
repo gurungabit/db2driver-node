@@ -46,12 +46,32 @@ pub fn build_pkgnamcsn(
     section_number: u16,
 ) -> Vec<u8> {
     let mut data = Vec::with_capacity(64);
-    // PKGNAMCSN uses UTF-8/ASCII encoding, NOT EBCDIC
+    // LUW accepts UTF-8/ASCII package-name fields.
     // Each field is right-padded with spaces to a fixed width
     // RDBNAM case must match how the database was created
     data.extend_from_slice(&pad_utf8(rdbnam, 18));
     data.extend_from_slice(&pad_utf8(rdbcolid, 18));
     data.extend_from_slice(&pad_utf8(pkgid, 18));
+    data.extend_from_slice(pkgcnstkn);
+    data.extend_from_slice(&section_number.to_be_bytes());
+    data
+}
+
+/// Build a PKGNAMCSN with EBCDIC package-name fields.
+///
+/// Db2 for z/OS dynamic packages use EBCDIC fixed-width RDB/package fields,
+/// while the consistency token remains the raw package token bytes.
+pub fn build_pkgnamcsn_ebcdic_names(
+    rdbnam: &str,
+    rdbcolid: &str,
+    pkgid: &str,
+    pkgcnstkn: &[u8; 8],
+    section_number: u16,
+) -> Vec<u8> {
+    let mut data = Vec::with_capacity(64);
+    data.extend_from_slice(&crate::codepage::pad_ebcdic(rdbnam, 18));
+    data.extend_from_slice(&crate::codepage::pad_ebcdic(rdbcolid, 18));
+    data.extend_from_slice(&crate::codepage::pad_ebcdic(pkgid, 18));
     data.extend_from_slice(pkgcnstkn);
     data.extend_from_slice(&section_number.to_be_bytes());
     data
@@ -89,4 +109,26 @@ pub fn build_query_pkgnamcsn(rdbnam: &str, section_number: u16) -> Vec<u8> {
         &PKGCNSTKN_PRPSQLSTT,
         section_number,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_pkgnamcsn_ebcdic_names() {
+        let bytes = build_pkgnamcsn_ebcdic_names(
+            "DDFIC0A",
+            DEFAULT_RDBCOLID,
+            DEFAULT_PKGID,
+            &DEFAULT_PKGCNSTKN,
+            4,
+        );
+
+        assert_eq!(bytes.len(), 64);
+        assert_eq!(&bytes[..7], &[0xC4, 0xC4, 0xC6, 0xC9, 0xC3, 0xF0, 0xC1]);
+        assert_eq!(bytes[7], 0x40);
+        assert_eq!(&bytes[54..62], b"SYSLVL01");
+        assert_eq!(&bytes[62..64], &4u16.to_be_bytes());
+    }
 }

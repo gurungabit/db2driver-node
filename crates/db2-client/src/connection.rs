@@ -21,6 +21,7 @@ use db2_proto::dss::{DssFrame, DssReader, DssWriter};
 
 pub(crate) const DIRECT_QUERY_PKGID: &str = db2_proto::commands::DEFAULT_PKGID;
 pub(crate) const DIRECT_QUERY_SECTION: u16 = 65;
+pub(crate) const ZOS_DIRECT_QUERY_SECTION: u16 = 4;
 // DB2 CLI binds large placeholder packages as SYSLHxyy. Using the first one gives
 // long-lived prepared statements their own section space instead of colliding with
 // the one-shot section we keep for direct query()/execute() calls.
@@ -76,18 +77,33 @@ impl ClientInner {
     }
 
     pub fn direct_query_pkgnamcsn(&mut self) -> Vec<u8> {
-        self.activate_section(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION);
-        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION)
+        let section_number = if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
+            ZOS_DIRECT_QUERY_SECTION
+        } else {
+            DIRECT_QUERY_SECTION
+        };
+        self.activate_section(DIRECT_QUERY_PKGID, section_number);
+        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, section_number)
     }
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
-        db2_proto::commands::build_pkgnamcsn(
-            &self.config.database,
-            db2_proto::commands::DEFAULT_RDBCOLID,
-            package_id,
-            &db2_proto::commands::DEFAULT_PKGCNSTKN,
-            section_number,
-        )
+        if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
+            db2_proto::commands::build_pkgnamcsn_ebcdic_names(
+                &self.config.database,
+                db2_proto::commands::DEFAULT_RDBCOLID,
+                package_id,
+                &db2_proto::commands::DEFAULT_PKGCNSTKN,
+                section_number,
+            )
+        } else {
+            db2_proto::commands::build_pkgnamcsn(
+                &self.config.database,
+                db2_proto::commands::DEFAULT_RDBCOLID,
+                package_id,
+                &db2_proto::commands::DEFAULT_PKGCNSTKN,
+                section_number,
+            )
+        }
     }
 
     pub fn allocate_prepared_section(&mut self) -> Result<u16, Error> {
@@ -526,6 +542,37 @@ impl ClientInner {
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
             let qryblksz: u32 = 0x0000FFFF;
+
+            if params.is_empty() && use_zos_sqlstt {
+                let opnqry_data = {
+                    let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
+                    ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
+                    ddm.add_u32(codepoints::QRYBLKSZ, qryblksz);
+                    ddm.add_u16(codepoints::MAXBLKEXT, qryblksz as u16);
+                    ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
+                    ddm.build()
+                };
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+
+                let mut writer = DssWriter::new(corr_id);
+                writer.write_request_next_same_corr(&prpsqlstt_data, true);
+                writer.write_object_same_corr(&sqlattr_data, true);
+                writer.write_object(&sqlstt_data, true);
+                writer.set_correlation_id(self.next_correlation_id());
+                writer.write_request(&opnqry_data, false);
+
+                let send_buf = writer.finish();
+                self.send_bytes(&send_buf).await?;
+
+                let frames = self.read_reply_frames().await?;
+                let column_info = self.parse_prepare_reply(&frames)?;
+                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+                return self
+                    .process_query_reply(&frames, &column_info, Some(&result_descriptors))
+                    .await;
+            }
+
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
             if use_zos_cursor_attributes {

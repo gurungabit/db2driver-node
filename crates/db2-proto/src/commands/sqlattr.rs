@@ -7,10 +7,11 @@ use crate::ddm::DdmBuilder;
 /// Db2 for z/OS expects SELECT statements opened through OPNQRY to be prepared
 /// as cursors. IBM requester traces include this attribute before SQLSTT.
 pub fn build_sqlattr_for_read_only_cursor() -> Vec<u8> {
+    let attribute = b"FOR READ ONLY ";
     let mut ddm = DdmBuilder::new(SQLATTR);
-    ddm.add_raw(&[0x00, 0x00, 0x00, 0x00]);
-    ddm.add_raw(&[0x0E]);
-    ddm.add_raw(b"FOR READ ONLY ");
+    ddm.add_raw(&(attribute.len() as u16).to_be_bytes());
+    ddm.add_raw(attribute);
+    ddm.add_raw(&[0x00, 0x00]);
     ddm.build()
 }
 
@@ -24,7 +25,8 @@ mod tests {
         let bytes = build_sqlattr_for_read_only_cursor();
         let (obj, _) = DdmObject::parse(&bytes).unwrap();
         assert_eq!(obj.code_point, SQLATTR);
-        assert_eq!(&obj.data[..5], &[0x00, 0x00, 0x00, 0x00, 0x0E]);
-        assert!(obj.data.ends_with(b"FOR READ ONLY "));
+        assert_eq!(u16::from_be_bytes([obj.data[0], obj.data[1]]), 14);
+        assert_eq!(&obj.data[2..16], b"FOR READ ONLY ");
+        assert_eq!(&obj.data[16..], &[0x00, 0x00]);
     }
 }

@@ -32,15 +32,13 @@ pub fn build_sqlstt(sql: &str) -> Vec<u8> {
 /// Build an SQLSTT object using the z/OS/JCC SQL statement group shape.
 ///
 /// IBM z/OS traces show SQLSTT data as:
-///   - 2-byte big-endian SQL statement group length, including the 2 trailing
-///     zero bytes
+///   - 2-byte big-endian SQL statement length
 ///   - SQL text in the negotiated source CCSID
 ///   - 0x0000 terminator
 pub fn build_sqlstt_zos(sql: &str) -> Vec<u8> {
     let sql_bytes = sql.as_bytes();
-    let group_len = sql_bytes.len() + 2;
     let mut ddm = DdmBuilder::new(SQLSTT);
-    ddm.add_raw(&(group_len as u16).to_be_bytes());
+    ddm.add_raw(&(sql_bytes.len() as u16).to_be_bytes());
     ddm.add_raw(sql_bytes);
     ddm.add_raw(&[0x00, 0x00]);
     ddm.build()
@@ -77,7 +75,7 @@ mod tests {
         assert_eq!(obj.code_point, SQLSTT);
         assert_eq!(
             u16::from_be_bytes([obj.data[0], obj.data[1]]) as usize,
-            sql.len() + 2
+            sql.len()
         );
         assert_eq!(&obj.data[2..2 + sql.len()], sql.as_bytes());
         assert_eq!(&obj.data[2 + sql.len()..], &[0x00, 0x00]);
