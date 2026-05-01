@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.22](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.22) (2026-05-01)
+
+### Bug Fixes
+
+- match z/OS SQL open-query block parameters
+
 ## [0.1.7-zos.21](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.21) (2026-05-01)
 
 ### Bug Fixes

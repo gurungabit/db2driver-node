@@ -541,7 +541,7 @@ impl ClientInner {
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
-            let qryblksz: u32 = 0x0000FFFF;
+            let qryblksz: u32 = if use_zos_sqlstt { 0 } else { 0x0000FFFF };
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -565,7 +565,9 @@ impl ClientInner {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
                     ddm.add_u32(codepoints::QRYBLKSZ, qryblksz);
-                    ddm.add_u16(codepoints::MAXBLKEXT, qryblksz as u16);
+                    if !use_zos_sqlstt {
+                        ddm.add_u16(codepoints::MAXBLKEXT, qryblksz as u16);
+                    }
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()
                 };
