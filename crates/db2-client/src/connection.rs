@@ -172,6 +172,27 @@ impl ClientInner {
         self.read_frames(1).await
     }
 
+    pub(crate) async fn read_prepare_reply_frames(&mut self) -> Result<Vec<DssFrame>, Error> {
+        let mut frames = self.read_reply_frames().await?;
+        let frame_drain_timeout = self.frame_drain_timeout();
+
+        loop {
+            let more_frames = match timeout(frame_drain_timeout, self.read_reply_frames()).await {
+                Ok(Ok(frames)) => frames,
+                Ok(Err(err)) => return Err(err),
+                Err(_) => break,
+            };
+
+            if more_frames.is_empty() {
+                break;
+            }
+
+            frames.extend(more_frames);
+        }
+
+        Ok(frames)
+    }
+
     fn frame_drain_timeout(&self) -> Duration {
         self.config.frame_drain_timeout
     }
@@ -279,6 +300,7 @@ impl ClientInner {
         debug!("Execute immediate: {}", sql);
 
         let corr_id = self.next_correlation_id();
+        let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         // Use EXCSQLIMM (0x200A) for non-query SQL execution
         let exec_data = if self.auto_commit {
@@ -286,7 +308,7 @@ impl ClientInner {
         } else {
             db2_proto::commands::excsqlimm::build_excsqlimm_default(&pkgnamcsn)
         };
-        let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
+        let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
         let rdbcmm_data = db2_proto::commands::rdbcmm::build_rdbcmm();
 
         // EXCSQLIMM + SQLSTT
@@ -490,8 +512,8 @@ impl ClientInner {
         debug!("Execute query with {} params: {}", params.len(), sql);
 
         let is_query = sql_is_query(sql);
-        let use_zos_cursor_attributes =
-            is_query && self.server_info.as_ref().map_or(false, is_db2_zos_server);
+        let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
+        let use_zos_cursor_attributes = is_query && use_zos_sqlstt;
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         let mut input_descriptors = Vec::new();
 
@@ -502,7 +524,7 @@ impl ClientInner {
             let corr_id = self.next_correlation_id();
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
-            let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
+            let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
             let qryblksz: u32 = 0x0000FFFF;
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -516,7 +538,7 @@ impl ClientInner {
             let send_buf = writer.finish();
             self.send_bytes(&send_buf).await?;
 
-            let frames = self.read_reply_frames().await?;
+            let frames = self.read_prepare_reply_frames().await?;
             let column_info = self.parse_prepare_reply(&frames)?;
             let result_descriptors = self.parse_prepare_result_descriptors(&frames);
 
@@ -567,7 +589,7 @@ impl ClientInner {
             let corr_id = self.next_correlation_id();
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
-            let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
+            let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -581,7 +603,7 @@ impl ClientInner {
             let send_buf = writer.finish();
             self.send_bytes(&send_buf).await?;
 
-            let frames = self.read_reply_frames().await?;
+            let frames = self.read_prepare_reply_frames().await?;
             let _column_info = self.parse_prepare_reply(&frames)?;
             if !params.is_empty() {
                 input_descriptors = self.describe_input(&pkgnamcsn).await?;
@@ -1278,9 +1300,9 @@ impl Client {
 
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
-            let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
-            let use_zos_cursor_attributes =
-                sql_is_query(sql) && guard.server_info.as_ref().map_or(false, is_db2_zos_server);
+            let use_zos_sqlstt = guard.server_info.as_ref().map_or(false, is_db2_zos_server);
+            let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
+            let use_zos_cursor_attributes = sql_is_query(sql) && use_zos_sqlstt;
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -1297,7 +1319,7 @@ impl Client {
                 return Err(err);
             }
 
-            let frames = match guard.read_reply_frames().await {
+            let frames = match guard.read_prepare_reply_frames().await {
                 Ok(frames) => frames,
                 Err(err) => {
                     guard.release_prepared_section(section_number);
@@ -1436,6 +1458,14 @@ pub(crate) fn is_db2_zos_server(server_info: &ServerInfo) -> bool {
     [&server_info.server_release, &server_info.server_class]
         .iter()
         .any(|value| value.trim_start().to_ascii_uppercase().starts_with("DSN"))
+}
+
+pub(crate) fn build_sqlstt_for_server(sql: &str, use_zos_format: bool) -> Vec<u8> {
+    if use_zos_format {
+        db2_proto::commands::sqlstt::build_sqlstt_zos(sql)
+    } else {
+        db2_proto::commands::sqlstt::build_sqlstt(sql)
+    }
 }
 
 pub(crate) fn build_sqldta(

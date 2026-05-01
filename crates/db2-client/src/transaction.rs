@@ -107,12 +107,12 @@ impl Transaction {
 
             let prpsqlstt_data =
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
-            let sqlstt_data = db2_proto::commands::sqlstt::build_sqlstt(sql);
-            let use_zos_cursor_attributes = crate::connection::sql_is_query(sql)
-                && guard
-                    .server_info
-                    .as_ref()
-                    .map_or(false, crate::connection::is_db2_zos_server);
+            let use_zos_sqlstt = guard
+                .server_info
+                .as_ref()
+                .map_or(false, crate::connection::is_db2_zos_server);
+            let sqlstt_data = crate::connection::build_sqlstt_for_server(sql, use_zos_sqlstt);
+            let use_zos_cursor_attributes = crate::connection::sql_is_query(sql) && use_zos_sqlstt;
 
             let mut writer = db2_proto::dss::DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -129,7 +129,7 @@ impl Transaction {
                 return Err(err);
             }
 
-            let frames = match guard.read_reply_frames().await {
+            let frames = match guard.read_prepare_reply_frames().await {
                 Ok(frames) => frames,
                 Err(err) => {
                     guard.release_prepared_section(section_number);

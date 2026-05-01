@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.19](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.19) (2026-05-01)
+
+### Bug Fixes
+
+- send z/OS SQLSTT statement groups in JCC format and drain prepare replies before opening cursors
+
 ## [0.1.7-zos.18](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.18) (2026-05-01)
 
 ### Bug Fixes
