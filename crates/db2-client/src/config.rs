@@ -10,6 +10,8 @@ pub struct Config {
     pub password: String,
     pub security_mechanism: SecurityMechanism,
     pub credential_encoding: CredentialEncoding,
+    pub encrypted_password_encoding: EncryptedPasswordEncoding,
+    pub encrypted_password_token_encoding: EncryptedPasswordEncoding,
     pub ssl: bool,
     pub ssl_config: Option<SslConfig>,
     pub connect_timeout: Duration,
@@ -37,6 +39,17 @@ pub enum SecurityMechanism {
 pub enum CredentialEncoding {
     /// Follow the server's negotiated Unicode manager support.
     Auto,
+    /// EBCDIC code page 037.
+    Ebcdic037,
+    /// UTF-8.
+    Utf8,
+}
+
+/// Encoding override for the password bytes used by SECMEC 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptedPasswordEncoding {
+    /// Use the same effective value as `credential_encoding`.
+    SameAsCredential,
     /// EBCDIC code page 037.
     Ebcdic037,
     /// UTF-8.
@@ -73,6 +86,8 @@ impl Default for Config {
             password: String::new(),
             security_mechanism: SecurityMechanism::EncryptedUserPassword,
             credential_encoding: CredentialEncoding::Auto,
+            encrypted_password_encoding: EncryptedPasswordEncoding::SameAsCredential,
+            encrypted_password_token_encoding: EncryptedPasswordEncoding::SameAsCredential,
             ssl: false,
             ssl_config: None,
             connect_timeout: Duration::from_secs(30),

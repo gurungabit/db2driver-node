@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use tracing::{debug, trace, warn};
 
-use crate::config::{Config, CredentialEncoding, SecurityMechanism};
+use crate::config::{Config, CredentialEncoding, EncryptedPasswordEncoding, SecurityMechanism};
 use crate::error::Error;
 use crate::transport::Transport;
 use db2_proto::codepoints;
@@ -99,6 +99,14 @@ pub async fn authenticate(
         )));
     }
     let credential_encoding = effective_credential_encoding(config, &server_info);
+    let encrypted_password_encoding = effective_encrypted_password_encoding(
+        config.encrypted_password_encoding,
+        credential_encoding,
+    );
+    let encrypted_password_token_encoding = effective_encrypted_password_encoding(
+        config.encrypted_password_token_encoding,
+        credential_encoding,
+    );
 
     // Parse ACCSECRD — get server's accepted mechanism and SECTKN
     let accsecrd_frame = &frames[1];
@@ -142,6 +150,8 @@ pub async fn authenticate(
         &client_private,
         config,
         credential_encoding,
+        encrypted_password_encoding,
+        encrypted_password_token_encoding,
     )?;
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_default(&config.database);
 
@@ -219,13 +229,19 @@ pub async fn authenticate(
                     .map_err(|e| Error::Protocol(e.to_string()))?;
                 saw_secchkrm = true;
                 if !reply.is_success() {
+                    let encoding_detail = format_auth_encoding_detail(
+                        accepted_secmec,
+                        credential_encoding,
+                        encrypted_password_encoding,
+                        encrypted_password_token_encoding,
+                    );
                     return Err(Error::Auth(format!(
-                        "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}, credential_encoding={:?}",
+                        "Security check failed: severity={}, check_code={}, requested_secmec=0x{:04X}, accepted_secmec=0x{:04X}, {}",
                         reply.severity_code,
                         format_security_check_code(reply.security_check_code),
                         requested_secmec,
                         accepted_secmec,
-                        credential_encoding
+                        encoding_detail
                     )));
                 }
                 debug!("Security check passed");
@@ -365,6 +381,8 @@ fn build_secchk_for_mechanism(
     client_private: &[u8],
     config: &Config,
     credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_token_encoding: db2_proto::commands::secchk::CredentialEncoding,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD => {
@@ -390,13 +408,17 @@ fn build_secchk_for_mechanism(
                         .into(),
                 )
             })?;
-            db2_proto::commands::secchk::build_secchk_usencpwd_with_encoding(
+            db2_proto::commands::secchk::build_secchk_usencpwd_with_encodings(
                 &config.database,
                 &config.user,
                 &config.password,
                 server_sectkn,
                 client_private,
-                credential_encoding,
+                db2_proto::commands::secchk::EncryptedPasswordCredentialEncodings {
+                    user_id: credential_encoding,
+                    password: encrypted_password_encoding,
+                    password_token: encrypted_password_token_encoding,
+                },
             )
             .map_err(Error::from)
         }
@@ -421,6 +443,19 @@ fn build_secchk_for_mechanism(
     }
 }
 
+fn effective_encrypted_password_encoding(
+    config_value: EncryptedPasswordEncoding,
+    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
+) -> db2_proto::commands::secchk::CredentialEncoding {
+    match config_value {
+        EncryptedPasswordEncoding::SameAsCredential => credential_encoding,
+        EncryptedPasswordEncoding::Ebcdic037 => {
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
+        }
+        EncryptedPasswordEncoding::Utf8 => db2_proto::commands::secchk::CredentialEncoding::Utf8,
+    }
+}
+
 fn effective_credential_encoding(
     config: &Config,
     server_info: &ServerInfo,
@@ -435,6 +470,21 @@ fn effective_credential_encoding(
                 db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
             }
         }
+    }
+}
+
+fn format_auth_encoding_detail(
+    accepted_secmec: u16,
+    credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    encrypted_password_token_encoding: db2_proto::commands::secchk::CredentialEncoding,
+) -> String {
+    if accepted_secmec == codepoints::SECMEC_USRENCPWD {
+        format!(
+            "credential_encoding={credential_encoding:?}, encrypted_password_encoding={encrypted_password_encoding:?}, encrypted_password_token_encoding={encrypted_password_token_encoding:?}"
+        )
+    } else {
+        format!("credential_encoding={credential_encoding:?}")
     }
 }
 

@@ -13,6 +13,8 @@ pub fn config_from_js(
     ca_cert: Option<String>,
     security_mechanism: Option<String>,
     credential_encoding: Option<String>,
+    encrypted_password_encoding: Option<String>,
+    encrypted_password_token_encoding: Option<String>,
     connect_timeout: Option<u32>,
     query_timeout: Option<u32>,
     frame_drain_timeout: Option<u32>,
@@ -27,6 +29,12 @@ pub fn config_from_js(
         password: password.to_string(),
         security_mechanism: parse_security_mechanism(security_mechanism)?,
         credential_encoding: parse_credential_encoding(credential_encoding)?,
+        encrypted_password_encoding: parse_encrypted_password_encoding(
+            encrypted_password_encoding,
+        )?,
+        encrypted_password_token_encoding: parse_encrypted_password_encoding(
+            encrypted_password_token_encoding,
+        )?,
         ..db2_client::Config::default()
     };
     let use_ssl = ssl.unwrap_or(false);
@@ -113,6 +121,38 @@ fn parse_credential_encoding(
         }
         _ => Err(napi::Error::from_reason(format!(
             "Unsupported credentialEncoding '{}'. Use 'auto', 'utf8', or 'ebcdic'.",
+            value
+        ))),
+    }
+}
+
+fn parse_encrypted_password_encoding(
+    value: Option<String>,
+) -> napi::Result<db2_client::EncryptedPasswordEncoding> {
+    let Some(value) = value else {
+        return Ok(db2_client::EncryptedPasswordEncoding::SameAsCredential);
+    };
+
+    let normalized: String = value
+        .trim()
+        .chars()
+        .filter(|c| *c != '_' && *c != '-' && !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+
+    match normalized.as_str() {
+        "" | "same" | "auto" | "credential" | "credentials" | "credentialencoding"
+        | "sameascredential" | "sameascredentials" => {
+            Ok(db2_client::EncryptedPasswordEncoding::SameAsCredential)
+        }
+        "utf8" | "unicode" | "unicode1208" | "ccsid1208" => {
+            Ok(db2_client::EncryptedPasswordEncoding::Utf8)
+        }
+        "ebcdic" | "ebcdic037" | "cp037" | "ibm037" | "ccsid37" | "ccsid037" => {
+            Ok(db2_client::EncryptedPasswordEncoding::Ebcdic037)
+        }
+        _ => Err(napi::Error::from_reason(format!(
+            "Unsupported encrypted password encoding '{}'. Use 'same', 'utf8', or 'ebcdic'.",
             value
         ))),
     }
@@ -273,5 +313,26 @@ mod tests {
             db2_client::CredentialEncoding::Ebcdic037
         );
         assert!(parse_credential_encoding(Some("unsupported".into())).is_err());
+    }
+
+    #[test]
+    fn encrypted_password_encoding_parser_accepts_public_aliases() {
+        assert_eq!(
+            parse_encrypted_password_encoding(None).unwrap(),
+            db2_client::EncryptedPasswordEncoding::SameAsCredential
+        );
+        assert_eq!(
+            parse_encrypted_password_encoding(Some("same-as-credential".into())).unwrap(),
+            db2_client::EncryptedPasswordEncoding::SameAsCredential
+        );
+        assert_eq!(
+            parse_encrypted_password_encoding(Some("utf-8".into())).unwrap(),
+            db2_client::EncryptedPasswordEncoding::Utf8
+        );
+        assert_eq!(
+            parse_encrypted_password_encoding(Some("CP037".into())).unwrap(),
+            db2_client::EncryptedPasswordEncoding::Ebcdic037
+        );
+        assert!(parse_encrypted_password_encoding(Some("unsupported".into())).is_err());
     }
 }

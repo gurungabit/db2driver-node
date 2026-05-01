@@ -12,7 +12,9 @@ pub mod transport;
 pub mod types;
 
 pub use column::ColumnInfo;
-pub use config::{Config, CredentialEncoding, SecurityMechanism, SslConfig};
+pub use config::{
+    Config, CredentialEncoding, EncryptedPasswordEncoding, SecurityMechanism, SslConfig,
+};
 pub use connection::Client;
 pub use error::Error;
 pub use pool::{Pool, PoolConfig};

@@ -14,6 +14,8 @@ export interface JsConnectionConfig {
   caCert?: string
   securityMechanism?: string
   credentialEncoding?: string
+  encryptedPasswordEncoding?: string
+  encryptedPasswordTokenEncoding?: string
   connectTimeout?: number
   queryTimeout?: number
   frameDrainTimeout?: number
@@ -47,6 +49,8 @@ export interface JsPoolConfig {
   caCert?: string
   securityMechanism?: string
   credentialEncoding?: string
+  encryptedPasswordEncoding?: string
+  encryptedPasswordTokenEncoding?: string
   connectTimeout?: number
   queryTimeout?: number
   frameDrainTimeout?: number
