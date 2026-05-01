@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.5](https://github.com/gurungabit/db2-node/compare/v0.1.4...v0.1.5) (2026-05-01)
+
+
+### Bug Fixes
+
+* omit RDBNAM from SECCHK for zOS ([0ef44bc](https://github.com/gurungabit/db2-node/commit/0ef44bc6eec84b312bd9bec674ebd0b0b354b5dd))
+
 ## [0.1.4](https://github.com/gurungabit/db2-node/compare/v0.1.3...v0.1.4) (2026-04-30)
 
 
