@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.5](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.5) (2026-05-01)
+
+### Bug Fixes
+
+- publish prerelease npm builds with the zos dist-tag
+
 ## [0.1.7-zos.4](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.4) (2026-05-01)
 
 ### Bug Fixes
