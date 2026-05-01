@@ -194,7 +194,7 @@ fn parse_type_definition_name(value: Option<String>) -> napi::Result<Option<Stri
     let normalized: String = value.trim().to_ascii_uppercase();
     match normalized.as_str() {
         "" => Ok(None),
-        "NONE" | "OMIT" | "OMITTED" | "DISABLE" | "DISABLED" => Ok(None),
+        "NONE" | "OMIT" | "OMITTED" | "DISABLE" | "DISABLED" => Ok(Some(String::new())),
         "QTDSQL370" | "QTDSQLASC" | "QTDSQLX86" | "QTDSQL400" => Ok(Some(normalized)),
         _ => Err(napi::Error::from_reason(format!(
             "Unsupported typeDefinitionName '{}'. Use 'none', 'QTDSQL370', 'QTDSQLASC', 'QTDSQLX86', or 'QTDSQL400'.",
@@ -411,7 +411,7 @@ mod tests {
         );
         assert_eq!(
             parse_type_definition_name(Some("none".into())).unwrap(),
-            None
+            Some(String::new())
         );
         assert!(parse_type_definition_name(Some("unsupported".into())).is_err());
     }

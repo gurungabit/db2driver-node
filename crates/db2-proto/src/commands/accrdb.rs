@@ -1,5 +1,5 @@
 //! Build ACCRDB (Access RDB) command.
-use crate::codepage::{pad_rdbnam, utf8_to_ebcdic037};
+use crate::codepage::utf8_to_ebcdic037;
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
@@ -17,18 +17,26 @@ fn build_crrtkn() -> Vec<u8> {
     token
 }
 
-/// Default product identifier (identifies as DB2 CLI client).
-pub const DEFAULT_PRDID: &str = "SQL11014";
+/// Default product identifier, aligned with current IBM JCC wire traces.
+pub const DEFAULT_PRDID: &str = "JCC04370";
 
 /// Default DRDA type definition name.
 ///
-/// Default to the z/OS-native type definition for DDF compatibility.
-pub const DEFAULT_TYPDEFNAM: &str = "QTDSQL370";
+/// Default type definition name, aligned with current IBM JCC wire traces.
+pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLASC";
 
 /// Default CCSID values.
 pub const DEFAULT_CCSID_SBC: u16 = 1208; // UTF-8 single-byte
 pub const DEFAULT_CCSID_DBC: u16 = 1200; // UTF-16
 pub const DEFAULT_CCSID_MBC: u16 = 1208; // UTF-8 mixed-byte
+pub const DEFAULT_CCSID_CMN: u16 = 1208; // UTF-8 common manager
+
+fn pad_ascii(name: &str, length: usize) -> Vec<u8> {
+    let mut bytes = name.as_bytes().to_vec();
+    bytes.truncate(length);
+    bytes.resize(length, b' ');
+    bytes
+}
 
 /// Build an ACCRDB DDM command.
 ///
@@ -67,11 +75,11 @@ pub fn build_accrdb_with_optional_type_definition(
     ccsid_mbc: u16,
 ) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(ACCRDB);
-    ddm.add_code_point(RDBNAM, &pad_rdbnam(rdbnam));
+    ddm.add_code_point(RDBNAM, &pad_ascii(rdbnam, 18));
     ddm.add_code_point(RDBACCCL, &SQLAM.to_be_bytes());
 
-    // PRDID is encoded as EBCDIC
-    ddm.add_ebcdic_string(PRDID, prdid);
+    // JCC sends ACCRDB character fields in the source CCSID (UTF-8), not EBCDIC.
+    ddm.add_string(PRDID, prdid);
 
     // CRRTKN (Correlation Token) — required by DB2 LUW for package access
     // Format: EBCDIC-encoded client identifier + timestamp bytes
@@ -79,8 +87,7 @@ pub fn build_accrdb_with_optional_type_definition(
     ddm.add_code_point(CRRTKN, &crrtkn);
 
     if let Some(typdefnam) = typdefnam {
-        // TYPDEFNAM is encoded as EBCDIC.
-        ddm.add_ebcdic_string(TYPDEFNAM, typdefnam);
+        ddm.add_string(TYPDEFNAM, typdefnam);
 
         // TYPDEFOVR contains CCSID sub-parameters.
         let mut typdefovr_data = Vec::new();
@@ -99,6 +106,11 @@ pub fn build_accrdb_with_optional_type_definition(
         typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
         typdefovr_data.extend_from_slice(&CCSIDMBC.to_be_bytes());
         typdefovr_data.extend_from_slice(&ccsid_mbc_bytes);
+        // CCSID manager/common value, sent by IBM JCC with QTDSQLASC.
+        let ccsid_cmn_bytes = DEFAULT_CCSID_CMN.to_be_bytes();
+        typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+        typdefovr_data.extend_from_slice(&CCSIDCMN.to_be_bytes());
+        typdefovr_data.extend_from_slice(&ccsid_cmn_bytes);
 
         ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
     }

@@ -196,7 +196,11 @@ pub async fn authenticate(
         credential_options,
         &accsecrd_detail,
     )?;
-    let type_definition_name = config.type_definition_name.as_deref();
+    let type_definition_name = match config.type_definition_name.as_deref() {
+        Some("") => None,
+        Some(value) => Some(value),
+        None => Some(db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM),
+    };
     let accrdb_data = db2_proto::commands::accrdb::build_accrdb_with_optional_type_definition(
         &config.database,
         db2_proto::commands::accrdb::DEFAULT_PRDID,
