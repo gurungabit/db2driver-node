@@ -345,10 +345,6 @@ fn build_secchk_for_mechanism(
             let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::SECCHK);
             ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_USRIDONL);
             ddm.add_code_point(
-                codepoints::RDBNAM,
-                &db2_proto::codepage::pad_rdbnam(&config.database),
-            );
-            ddm.add_code_point(
                 codepoints::USRID,
                 &db2_proto::codepage::utf8_to_ebcdic037(&config.user),
             );

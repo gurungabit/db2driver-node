@@ -25,17 +25,39 @@ pub fn build_secchk(
     ddm.build()
 }
 
+/// Build a SECCHK DDM command with user ID and password credentials.
+///
+/// The database name is sent in ACCSEC/ACCRDB. Some DB2 z/OS servers reject
+/// RDBNAM when it is repeated inside SECCHK, so package code should prefer
+/// this builder unless it explicitly needs the legacy framing above.
+pub fn build_secchk_without_rdbnam(
+    security_mechanism: u16,
+    user_id: &str,
+    password: &str,
+) -> Vec<u8> {
+    let mut ddm = DdmBuilder::new(SECCHK);
+    ddm.add_u16(SECMEC, security_mechanism);
+    ddm.add_code_point(USRID, &utf8_to_ebcdic037(user_id));
+    ddm.add_code_point(PASSWORD, &utf8_to_ebcdic037(password));
+    ddm.build()
+}
+
 /// Build SECCHK for user ID + password authentication.
-pub fn build_secchk_usridpwd(rdbnam: &str, user_id: &str, password: &str) -> Vec<u8> {
-    build_secchk(SECMEC_USRIDPWD, rdbnam, user_id, password)
+///
+/// The `rdbnam` argument is retained for API compatibility; it is not encoded
+/// in SECCHK because the database name is already sent in ACCSEC/ACCRDB.
+pub fn build_secchk_usridpwd(_rdbnam: &str, user_id: &str, password: &str) -> Vec<u8> {
+    build_secchk_without_rdbnam(SECMEC_USRIDPWD, user_id, password)
 }
 
 /// Build SECCHK for encrypted user ID + password authentication (SECMEC 0x0009).
 ///
 /// The user ID and password are encrypted with the Diffie-Hellman session key
 /// negotiated through ACCSEC/ACCSECRD, then sent as two SECTKN parameters.
+/// The `rdbnam` argument is retained for API compatibility; it is not encoded
+/// in SECCHK because the database name is already sent in ACCSEC/ACCRDB.
 pub fn build_secchk_eusridpwd(
-    rdbnam: &str,
+    _rdbnam: &str,
     user_id: &str,
     password: &str,
     server_sectkn: &[u8],
@@ -55,7 +77,6 @@ pub fn build_secchk_eusridpwd(
 
     let mut ddm = DdmBuilder::new(SECCHK);
     ddm.add_u16(SECMEC, SECMEC_EUSRIDPWD);
-    ddm.add_code_point(RDBNAM, &pad_rdbnam(rdbnam));
     ddm.add_code_point(SECTKN, &encrypted_user_id);
     ddm.add_code_point(SECTKN, &encrypted_password);
     Ok(ddm.build())
@@ -69,6 +90,17 @@ mod tests {
     #[test]
     fn test_build_secchk() {
         let bytes = build_secchk_usridpwd("testdb", "db2inst1", "password123");
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        assert_eq!(obj.code_point, SECCHK);
+        let params = obj.parameters();
+        assert!(!params.iter().any(|p| p.code_point == RDBNAM));
+        assert!(params.iter().any(|p| p.code_point == USRID));
+        assert!(params.iter().any(|p| p.code_point == PASSWORD));
+    }
+
+    #[test]
+    fn test_build_legacy_secchk_with_rdbnam() {
+        let bytes = build_secchk(SECMEC_USRIDPWD, "testdb", "db2inst1", "password123");
         let (obj, _) = DdmObject::parse(&bytes).unwrap();
         assert_eq!(obj.code_point, SECCHK);
         let params = obj.parameters();
@@ -94,7 +126,7 @@ mod tests {
         let (obj, _) = DdmObject::parse(&bytes).unwrap();
         assert_eq!(obj.code_point, SECCHK);
         let params = obj.parameters();
-        assert!(params.iter().any(|p| p.code_point == RDBNAM));
+        assert!(!params.iter().any(|p| p.code_point == RDBNAM));
         assert_eq!(params.iter().filter(|p| p.code_point == SECTKN).count(), 2);
         assert!(!params.iter().any(|p| p.code_point == USRID));
         assert!(!params.iter().any(|p| p.code_point == PASSWORD));
