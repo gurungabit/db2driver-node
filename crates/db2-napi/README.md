@@ -68,7 +68,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `securityMechanism` | `string` | `'encrypted'` | DRDA authentication mechanism: `'encrypted'` (SECMEC 9), `'encryptedPassword'` (SECMEC 7), `'userPassword'` (SECMEC 3), or `'userOnly'` (SECMEC 4) |
 | `encryptionAlgorithm` | `string` | `'des'` | DRDA encrypted credential algorithm: `'des'` or `'aes'` |
 | `credentialEncoding` | `string` | `'auto'` | Credential string encoding for `SECCHK`: `'auto'`, `'utf8'`, or `'ebcdic'` |
-| `encryptedPasswordEncoding` | `string` | `'same'` | SECMEC 7 encrypted password plaintext encoding: `'same'`, `'utf8'`, or `'ebcdic'` |
+| `encryptedPasswordEncoding` | `string` | `'same'` | SECMEC 7 DES encrypted password plaintext encoding: `'same'`, `'utf8'`, or `'ebcdic'`; AES uses UTF-8/source CCSID |
 | `encryptedPasswordTokenEncoding` | `string` | `'same'` | SECMEC 7 DES password IV/token encoding, based on the user ID: `'same'`, `'utf8'`, or `'ebcdic'`; AES uses the server security token |
 | `ssl` | `boolean` | `false` | Enable TLS/SSL |
 | `rejectUnauthorized` | `boolean` | `true` | Verify server certificate (requires `ssl: true`) |
@@ -202,7 +202,7 @@ Use `securityMechanism: 'userPassword'` only with TLS in production, because DRD
 
 If your JDBC tool is configured with `securityMechanism=7` / `ENCRYPTED_PASSWORD_SECURITY`, use `securityMechanism: 'encryptedPassword'`. That sends the user ID in clear text and encrypts only the password, matching the IBM JCC `SECMEC 7` flow. Credential bytes default to `credentialEncoding: 'auto'`, which follows the server's negotiated Unicode manager; set `credentialEncoding: 'utf8'` or `'ebcdic'` to override it while diagnosing z/OS authentication.
 
-Some z/OS configurations accept the clear user ID in one encoding while expecting the encrypted password bytes in another. For SECMEC 7 diagnostics, `encryptedPasswordEncoding` controls the password plaintext bytes before encryption. For DES only, `encryptedPasswordTokenEncoding` controls the user-ID-derived IV/token bytes. AES uses the server security token as the IV, matching IBM JCC.
+Some z/OS configurations accept the clear user ID in one encoding while expecting the encrypted password bytes in another. For SECMEC 7 DES diagnostics, `encryptedPasswordEncoding` controls the password plaintext bytes before encryption and `encryptedPasswordTokenEncoding` controls the user-ID-derived IV/token bytes. AES follows IBM JCC: the password plaintext uses UTF-8/source CCSID and the IV uses the server security token.
 
 If the server is configured for AES encrypted authentication, set `encryptionAlgorithm: 'aes'`. This advertises DRDA Security Manager level 9 and sends `ENCALG=AES` / `ENCKEYLEN=256` during `ACCSEC`:
 

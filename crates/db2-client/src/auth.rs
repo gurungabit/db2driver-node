@@ -112,11 +112,11 @@ pub async fn authenticate(
         )));
     }
     let credential_encoding = effective_credential_encoding(config, &server_info);
-    let encrypted_password_encoding = effective_encrypted_password_encoding(
+    let mut encrypted_password_encoding = effective_encrypted_password_encoding(
         config.encrypted_password_encoding,
         credential_encoding,
     );
-    let encrypted_password_token_encoding = effective_encrypted_password_encoding(
+    let mut encrypted_password_token_encoding = effective_encrypted_password_encoding(
         config.encrypted_password_token_encoding,
         credential_encoding,
     );
@@ -159,6 +159,15 @@ pub async fn authenticate(
         accepted_encryption_algorithm_code,
         requested_encryption_algorithm,
     )?;
+    (
+        encrypted_password_encoding,
+        encrypted_password_token_encoding,
+    ) = jcc_compatible_encrypted_password_encodings(
+        accepted_secmec,
+        negotiated_encryption_algorithm,
+        encrypted_password_encoding,
+        encrypted_password_token_encoding,
+    );
     let accsecrd_detail = format_reply_detail(&accsecrd_obj);
     let credential_options = AuthCredentialOptions {
         credential_encoding,
@@ -540,6 +549,29 @@ fn effective_encrypted_password_encoding(
     }
 }
 
+fn jcc_compatible_encrypted_password_encodings(
+    accepted_secmec: u16,
+    encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
+    password_encoding: db2_proto::commands::secchk::CredentialEncoding,
+    token_encoding: db2_proto::commands::secchk::CredentialEncoding,
+) -> (
+    db2_proto::commands::secchk::CredentialEncoding,
+    db2_proto::commands::secchk::CredentialEncoding,
+) {
+    if accepted_secmec == codepoints::SECMEC_USRENCPWD
+        && encryption_algorithm == db2_proto::secmec9::EncryptionAlgorithm::Aes
+    {
+        // IBM JCC uses the source CCSID manager (CCSID 1208) for the password
+        // plaintext in SECMEC 7 AES. The user-id-derived token is DES-only.
+        (
+            db2_proto::commands::secchk::CredentialEncoding::Utf8,
+            db2_proto::commands::secchk::CredentialEncoding::Utf8,
+        )
+    } else {
+        (password_encoding, token_encoding)
+    }
+}
+
 fn effective_credential_encoding(
     config: &Config,
     server_info: &ServerInfo,
@@ -880,6 +912,41 @@ mod tests {
 
         assert_eq!(
             effective_credential_encoding(&config, &server_info),
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
+        );
+    }
+
+    #[test]
+    fn secmec7_aes_forces_jcc_source_ccsid_password_encoding() {
+        let (password_encoding, token_encoding) = jcc_compatible_encrypted_password_encodings(
+            codepoints::SECMEC_USRENCPWD,
+            db2_proto::secmec9::EncryptionAlgorithm::Aes,
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037,
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037,
+        );
+
+        assert_eq!(
+            password_encoding,
+            db2_proto::commands::secchk::CredentialEncoding::Utf8
+        );
+        assert_eq!(
+            token_encoding,
+            db2_proto::commands::secchk::CredentialEncoding::Utf8
+        );
+
+        let (password_encoding, token_encoding) = jcc_compatible_encrypted_password_encodings(
+            codepoints::SECMEC_USRENCPWD,
+            db2_proto::secmec9::EncryptionAlgorithm::Des,
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037,
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037,
+        );
+
+        assert_eq!(
+            password_encoding,
+            db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
+        );
+        assert_eq!(
+            token_encoding,
             db2_proto::commands::secchk::CredentialEncoding::Ebcdic037
         );
     }

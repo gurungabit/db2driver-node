@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.7](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.7) (2026-05-01)
+
+### Bug Fixes
+
+- force JCC-compatible UTF-8 password plaintext for SECMEC 7 AES authentication
+
 ## [0.1.7-zos.6](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.6) (2026-05-01)
 
 ### Bug Fixes
