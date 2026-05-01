@@ -20,8 +20,11 @@ fn build_crrtkn() -> Vec<u8> {
 /// Default product identifier (identifies as DB2 CLI client).
 pub const DEFAULT_PRDID: &str = "SQL11014";
 
-/// Default type definition name for x86/Linux/Windows.
-pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLX86";
+/// Default DRDA type definition name.
+///
+/// IBM JCC uses QTDSQLASC for UTF-8/source-CCSID DRDA clients. Db2 for z/OS
+/// can reject QTDSQLX86 during ACCRDB with VALNSPRM on TYPDEFNAM.
+pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLASC";
 
 /// Default CCSID values.
 pub const DEFAULT_CCSID_SBC: u16 = 1208; // UTF-8 single-byte
@@ -33,7 +36,7 @@ pub const DEFAULT_CCSID_MBC: u16 = 1208; // UTF-8 mixed-byte
 /// Parameters:
 ///   - rdbnam: Database name
 ///   - prdid: Product specific identifier (e.g., "JCC04200")
-///   - typdefnam: Type definition name (e.g., "QTDSQLX86")
+///   - typdefnam: Type definition name (e.g., "QTDSQLASC")
 ///   - ccsid_sbc: CCSID for single-byte characters
 ///   - ccsid_dbc: CCSID for double-byte characters
 ///   - ccsid_mbc: CCSID for mixed-byte characters

@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.11](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.11) (2026-05-01)
+
+### Bug Fixes
+
+- use JCC-compatible QTDSQLASC type definition negotiation for z/OS ACCRDB
+
 ## [0.1.7-zos.10](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.10) (2026-05-01)
 
 ### Bug Fixes
