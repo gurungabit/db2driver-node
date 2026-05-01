@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.27](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.27) (2026-05-01)
+
+### Bug Fixes
+
+- use low z/OS dynamic package section for direct SELECT queries
+
 ## [0.1.7-zos.26](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.26) (2026-05-01)
 
 ### Bug Fixes

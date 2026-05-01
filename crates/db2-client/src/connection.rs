@@ -21,6 +21,7 @@ use db2_proto::dss::{DssFrame, DssReader, DssWriter};
 
 pub(crate) const DIRECT_QUERY_PKGID: &str = db2_proto::commands::DEFAULT_PKGID;
 pub(crate) const DIRECT_QUERY_SECTION: u16 = 65;
+pub(crate) const ZOS_DIRECT_QUERY_SECTION: u16 = 1;
 // DB2 CLI binds large placeholder packages as SYSLHxyy. Using the first one gives
 // long-lived prepared statements their own section space instead of colliding with
 // the one-shot section we keep for direct query()/execute() calls.
@@ -76,8 +77,13 @@ impl ClientInner {
     }
 
     pub fn direct_query_pkgnamcsn(&mut self) -> Vec<u8> {
-        self.activate_section(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION);
-        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, DIRECT_QUERY_SECTION)
+        let section_number = if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
+            ZOS_DIRECT_QUERY_SECTION
+        } else {
+            DIRECT_QUERY_SECTION
+        };
+        self.activate_section(DIRECT_QUERY_PKGID, section_number);
+        self.build_pkgnamcsn_for(DIRECT_QUERY_PKGID, section_number)
     }
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
