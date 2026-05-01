@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.25](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.25) (2026-05-01)
+
+### Bug Fixes
+
+- use documented z/OS SQLATTR statement attribute group
+
 ## [0.1.7-zos.24](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.24) (2026-05-01)
 
 ### Bug Fixes
