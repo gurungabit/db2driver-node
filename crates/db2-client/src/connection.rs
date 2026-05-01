@@ -87,11 +87,17 @@ impl ClientInner {
     }
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
+        let pkgcnstkn = if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
+            &db2_proto::commands::ZOS_PKGCNSTKN_PRPSQLSTT
+        } else {
+            &db2_proto::commands::DEFAULT_PKGCNSTKN
+        };
+
         db2_proto::commands::build_pkgnamcsn(
             &self.config.database,
             db2_proto::commands::DEFAULT_RDBCOLID,
             package_id,
-            &db2_proto::commands::DEFAULT_PKGCNSTKN,
+            pkgcnstkn,
             section_number,
         )
     }

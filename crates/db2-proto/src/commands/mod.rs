@@ -27,6 +27,9 @@ pub const PKGCNSTKN_EXCSQLSET: [u8; 8] = [0x01; 8];
 /// Consistency token for PRPSQLSTT/OPNQRY ("SYSLVL01" in ASCII).
 pub const PKGCNSTKN_PRPSQLSTT: [u8; 8] = *b"SYSLVL01";
 
+/// z/OS dynamic package consistency token commonly used by SYSSH200.
+pub const ZOS_PKGCNSTKN_PRPSQLSTT: [u8; 8] = *b"SYSLVL02";
+
 /// Default consistency token — must match UNIQUE_ID in SYSCAT.PACKAGES for SYSSH200.
 pub const DEFAULT_PKGCNSTKN: [u8; 8] = *b"SYSLVL01";
 
