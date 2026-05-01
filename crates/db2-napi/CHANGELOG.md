@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.13](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.13) (2026-05-01)
+
+### Bug Fixes
+
+- omit ACCRDB TYPDEFNAM/TYPDEFOVR by default for z/OS servers that reject type negotiation
+
 ## [0.1.7-zos.12](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.12) (2026-05-01)
 
 ### Bug Fixes

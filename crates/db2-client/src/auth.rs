@@ -196,11 +196,8 @@ pub async fn authenticate(
         credential_options,
         &accsecrd_detail,
     )?;
-    let type_definition_name = config
-        .type_definition_name
-        .as_deref()
-        .unwrap_or(db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM);
-    let accrdb_data = db2_proto::commands::accrdb::build_accrdb(
+    let type_definition_name = config.type_definition_name.as_deref();
+    let accrdb_data = db2_proto::commands::accrdb::build_accrdb_with_optional_type_definition(
         &config.database,
         db2_proto::commands::accrdb::DEFAULT_PRDID,
         type_definition_name,
@@ -344,10 +341,12 @@ pub async fn authenticate(
                 )));
             }
             codepoints::CMDNSPRM | codepoints::PRMNSPRM | codepoints::VALNSPRM => {
+                let typdef_detail = type_definition_name.unwrap_or("<omitted>");
                 return Err(Error::Protocol(format!(
-                    "Server rejected an authentication parameter with {}: {}; received {}",
+                    "Server rejected an authentication parameter with {}: {}; accrdb_type_definition_name={}; received {}",
                     code_point_name(obj.code_point),
                     format_reply_detail(&obj),
+                    typdef_detail,
                     format_code_points(&received_code_points)
                 )));
             }

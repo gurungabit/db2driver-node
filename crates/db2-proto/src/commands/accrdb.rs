@@ -47,6 +47,25 @@ pub fn build_accrdb(
     ccsid_dbc: u16,
     ccsid_mbc: u16,
 ) -> Vec<u8> {
+    build_accrdb_with_optional_type_definition(
+        rdbnam,
+        prdid,
+        Some(typdefnam),
+        ccsid_sbc,
+        ccsid_dbc,
+        ccsid_mbc,
+    )
+}
+
+/// Build an ACCRDB DDM command, optionally omitting TYPDEFNAM/TYPDEFOVR.
+pub fn build_accrdb_with_optional_type_definition(
+    rdbnam: &str,
+    prdid: &str,
+    typdefnam: Option<&str>,
+    ccsid_sbc: u16,
+    ccsid_dbc: u16,
+    ccsid_mbc: u16,
+) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(ACCRDB);
     ddm.add_code_point(RDBNAM, &pad_rdbnam(rdbnam));
     ddm.add_code_point(RDBACCCL, &SQLAM.to_be_bytes());
@@ -54,33 +73,35 @@ pub fn build_accrdb(
     // PRDID is encoded as EBCDIC
     ddm.add_ebcdic_string(PRDID, prdid);
 
-    // TYPDEFNAM is encoded as EBCDIC
-    ddm.add_ebcdic_string(TYPDEFNAM, typdefnam);
-
     // CRRTKN (Correlation Token) — required by DB2 LUW for package access
     // Format: EBCDIC-encoded client identifier + timestamp bytes
     let crrtkn = build_crrtkn();
     ddm.add_code_point(CRRTKN, &crrtkn);
 
-    // TYPDEFOVR contains CCSID sub-parameters
-    let mut typdefovr_data = Vec::new();
-    // CCSIDSBC
-    let ccsid_sbc_bytes = ccsid_sbc.to_be_bytes();
-    typdefovr_data.extend_from_slice(&6u16.to_be_bytes()); // length: 4 header + 2 data
-    typdefovr_data.extend_from_slice(&CCSIDSBC.to_be_bytes());
-    typdefovr_data.extend_from_slice(&ccsid_sbc_bytes);
-    // CCSIDDBC
-    let ccsid_dbc_bytes = ccsid_dbc.to_be_bytes();
-    typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
-    typdefovr_data.extend_from_slice(&CCSIDDBC.to_be_bytes());
-    typdefovr_data.extend_from_slice(&ccsid_dbc_bytes);
-    // CCSIDMBC
-    let ccsid_mbc_bytes = ccsid_mbc.to_be_bytes();
-    typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
-    typdefovr_data.extend_from_slice(&CCSIDMBC.to_be_bytes());
-    typdefovr_data.extend_from_slice(&ccsid_mbc_bytes);
+    if let Some(typdefnam) = typdefnam {
+        // TYPDEFNAM is encoded as EBCDIC.
+        ddm.add_ebcdic_string(TYPDEFNAM, typdefnam);
 
-    ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
+        // TYPDEFOVR contains CCSID sub-parameters.
+        let mut typdefovr_data = Vec::new();
+        // CCSIDSBC
+        let ccsid_sbc_bytes = ccsid_sbc.to_be_bytes();
+        typdefovr_data.extend_from_slice(&6u16.to_be_bytes()); // length: 4 header + 2 data
+        typdefovr_data.extend_from_slice(&CCSIDSBC.to_be_bytes());
+        typdefovr_data.extend_from_slice(&ccsid_sbc_bytes);
+        // CCSIDDBC
+        let ccsid_dbc_bytes = ccsid_dbc.to_be_bytes();
+        typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+        typdefovr_data.extend_from_slice(&CCSIDDBC.to_be_bytes());
+        typdefovr_data.extend_from_slice(&ccsid_dbc_bytes);
+        // CCSIDMBC
+        let ccsid_mbc_bytes = ccsid_mbc.to_be_bytes();
+        typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+        typdefovr_data.extend_from_slice(&CCSIDMBC.to_be_bytes());
+        typdefovr_data.extend_from_slice(&ccsid_mbc_bytes);
+
+        ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
+    }
 
     ddm.build()
 }
@@ -112,5 +133,23 @@ mod tests {
         assert!(params.iter().any(|p| p.code_point == PRDID));
         assert!(params.iter().any(|p| p.code_point == TYPDEFNAM));
         assert!(params.iter().any(|p| p.code_point == TYPDEFOVR));
+    }
+
+    #[test]
+    fn test_build_accrdb_can_omit_type_definition() {
+        let bytes = build_accrdb_with_optional_type_definition(
+            "TESTDB",
+            DEFAULT_PRDID,
+            None,
+            DEFAULT_CCSID_SBC,
+            DEFAULT_CCSID_DBC,
+            DEFAULT_CCSID_MBC,
+        );
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let params = obj.parameters();
+        assert!(params.iter().any(|p| p.code_point == RDBNAM));
+        assert!(params.iter().any(|p| p.code_point == PRDID));
+        assert!(!params.iter().any(|p| p.code_point == TYPDEFNAM));
+        assert!(!params.iter().any(|p| p.code_point == TYPDEFOVR));
     }
 }
