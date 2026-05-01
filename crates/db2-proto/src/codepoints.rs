@@ -35,7 +35,6 @@ pub const TYPDEFOVR: u16 = 0x0035; // TYPDEF Overrides
 pub const CCSIDSBC: u16 = 0x119C; // CCSID for Single-Byte Characters
 pub const CCSIDDBC: u16 = 0x119D; // CCSID for Double-Byte Characters
 pub const CCSIDMBC: u16 = 0x119E; // CCSID for Mixed-Byte Characters
-pub const CCSIDCMN: u16 = 0x1191; // CCSID for Common Manager
 pub const RDBACCCL: u16 = 0x210F; // RDB Access Manager Class
 pub const CRRTKN: u16 = 0x2135; // Correlation Token
 

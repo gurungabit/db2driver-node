@@ -29,7 +29,6 @@ pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLASC";
 pub const DEFAULT_CCSID_SBC: u16 = 1208; // UTF-8 single-byte
 pub const DEFAULT_CCSID_DBC: u16 = 1200; // UTF-16
 pub const DEFAULT_CCSID_MBC: u16 = 1208; // UTF-8 mixed-byte
-pub const DEFAULT_CCSID_CMN: u16 = 1208; // UTF-8 common manager
 
 fn pad_ascii(name: &str, length: usize) -> Vec<u8> {
     let mut bytes = name.as_bytes().to_vec();
@@ -106,12 +105,6 @@ pub fn build_accrdb_with_optional_type_definition(
         typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
         typdefovr_data.extend_from_slice(&CCSIDMBC.to_be_bytes());
         typdefovr_data.extend_from_slice(&ccsid_mbc_bytes);
-        // CCSID manager/common value, sent by IBM JCC with QTDSQLASC.
-        let ccsid_cmn_bytes = DEFAULT_CCSID_CMN.to_be_bytes();
-        typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
-        typdefovr_data.extend_from_slice(&CCSIDCMN.to_be_bytes());
-        typdefovr_data.extend_from_slice(&ccsid_cmn_bytes);
-
         ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
     }
 

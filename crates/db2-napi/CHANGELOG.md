@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.15](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.15) (2026-05-01)
+
+### Bug Fixes
+
+- omit CCSIDCMN from ACCRDB TYPDEFOVR for z/OS hosts that reject 0x1191
+
 ## [0.1.7-zos.14](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.14) (2026-05-01)
 
 ### Bug Fixes
