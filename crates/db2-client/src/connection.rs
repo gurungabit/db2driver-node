@@ -539,7 +539,10 @@ impl ClientInner {
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
-                    ddm.add_u32(codepoints::QRYBLKSZ, 0);
+                    ddm.add_u32(
+                        codepoints::QRYBLKSZ,
+                        db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                    );
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()
                 };
