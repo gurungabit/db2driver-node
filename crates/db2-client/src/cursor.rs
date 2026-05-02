@@ -64,7 +64,7 @@ impl Cursor {
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
                 db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-                Some(0),
+                Some(-1),
                 None,
                 Some(codepoints::RTNEXTALL),
             )
