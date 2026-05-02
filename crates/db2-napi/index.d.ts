@@ -33,6 +33,7 @@ export interface JsQueryResult {
 export interface JsColumnInfo {
   name: string
   typeName: string
+  db2TypeName?: string
   nullable: boolean
   precision?: number
   scale?: number

@@ -208,12 +208,16 @@ pub fn query_result_to_js(result: db2_client::types::QueryResult) -> JsQueryResu
     let columns: Vec<JsColumnInfo> = result
         .columns
         .iter()
-        .map(|col| JsColumnInfo {
-            name: col.name.clone(),
-            type_name: col.type_name.clone(),
-            nullable: col.nullable,
-            precision: col.precision.map(|p| p as u32),
-            scale: col.scale.map(|s| s as u32),
+        .map(|col| {
+            let type_name = public_type_name(&col.type_name);
+            JsColumnInfo {
+                name: col.name.clone(),
+                db2_type_name: raw_db2_type_name(&col.type_name, &type_name),
+                type_name,
+                nullable: col.nullable,
+                precision: col.precision.map(|p| p as u32),
+                scale: col.scale.map(|s| s as u32),
+            }
         })
         .collect();
 
@@ -230,6 +234,36 @@ pub fn query_result_to_js(result: db2_client::types::QueryResult) -> JsQueryResu
         columns,
         diagnostics: result.diagnostics,
     }
+}
+
+fn public_type_name(type_name: &str) -> String {
+    if let Some(len) = parse_enum_length(type_name, "Graphic") {
+        return format!("CHAR({len})");
+    }
+    if let Some(len) = parse_enum_length(type_name, "VarGraphic") {
+        return format!("VARCHAR({len})");
+    }
+    type_name.to_string()
+}
+
+fn raw_db2_type_name(raw: &str, public: &str) -> Option<String> {
+    let db2_type = if let Some(len) = parse_enum_length(raw, "Graphic") {
+        format!("GRAPHIC({len})")
+    } else if let Some(len) = parse_enum_length(raw, "VarGraphic") {
+        format!("VARGRAPHIC({len})")
+    } else {
+        raw.to_string()
+    };
+
+    (db2_type != public).then_some(db2_type)
+}
+
+fn parse_enum_length(type_name: &str, variant: &str) -> Option<u16> {
+    let inner = type_name
+        .strip_prefix(variant)?
+        .strip_prefix('(')?
+        .strip_suffix(')')?;
+    inner.parse::<u16>().ok()
 }
 
 /// Convert a single Row to a JSON object using column names as keys.
@@ -415,5 +449,20 @@ mod tests {
             Some(String::new())
         );
         assert!(parse_type_definition_name(Some("unsupported".into())).is_err());
+    }
+
+    #[test]
+    fn graphic_column_types_are_publicly_shown_as_char_types() {
+        assert_eq!(public_type_name("Graphic(1)"), "CHAR(1)");
+        assert_eq!(public_type_name("VarGraphic(45)"), "VARCHAR(45)");
+        assert_eq!(
+            raw_db2_type_name("Graphic(1)", "CHAR(1)"),
+            Some("GRAPHIC(1)".to_string())
+        );
+        assert_eq!(
+            raw_db2_type_name("VarGraphic(45)", "VARCHAR(45)"),
+            Some("VARGRAPHIC(45)".to_string())
+        );
+        assert_eq!(raw_db2_type_name("Integer", "Integer"), None);
     }
 }

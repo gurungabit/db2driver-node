@@ -42,6 +42,7 @@ pub struct JsQueryResult {
 pub struct JsColumnInfo {
     pub name: String,
     pub type_name: String,
+    pub db2_type_name: Option<String>,
     pub nullable: bool,
     pub precision: Option<u32>,
     pub scale: Option<u32>,
