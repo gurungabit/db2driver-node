@@ -87,17 +87,11 @@ impl ClientInner {
     }
 
     pub fn build_pkgnamcsn_for(&self, package_id: &str, section_number: u16) -> Vec<u8> {
-        let pkgcnstkn = if self.server_info.as_ref().map_or(false, is_db2_zos_server) {
-            &db2_proto::commands::ZOS_PKGCNSTKN_PRPSQLSTT
-        } else {
-            &db2_proto::commands::DEFAULT_PKGCNSTKN
-        };
-
         db2_proto::commands::build_pkgnamcsn(
             &self.config.database,
             db2_proto::commands::DEFAULT_RDBCOLID,
             package_id,
-            pkgcnstkn,
+            &db2_proto::commands::DEFAULT_PKGCNSTKN,
             section_number,
         )
     }
@@ -538,6 +532,35 @@ impl ClientInner {
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
             let qryblksz: u32 = 0x0000FFFF;
+
+            if params.is_empty() && use_zos_sqlstt {
+                let sqlattr_data =
+                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
+                let opnqry_data = {
+                    let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
+                    ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
+                    ddm.add_u32(codepoints::QRYBLKSZ, 5);
+                    ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
+                    ddm.build()
+                };
+
+                let mut writer = DssWriter::new(corr_id);
+                writer.write_request_next_same_corr(&prpsqlstt_data, true);
+                writer.write_object_same_corr(&sqlattr_data, true);
+                writer.write_object(&sqlstt_data, true);
+                writer.set_correlation_id(self.next_correlation_id());
+                writer.write_request(&opnqry_data, false);
+
+                let send_buf = writer.finish();
+                self.send_bytes(&send_buf).await?;
+
+                let frames = self.read_execute_reply_frames().await?;
+                let column_info = self.parse_prepare_reply(&frames)?;
+                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+                return self
+                    .process_query_reply(&frames, &column_info, Some(&result_descriptors))
+                    .await;
+            }
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
