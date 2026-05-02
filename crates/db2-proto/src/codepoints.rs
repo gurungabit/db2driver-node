@@ -131,6 +131,8 @@ pub const MONITOR: u16 = 0x1900; // Monitor
 pub const RDBCMTOK: u16 = 0x2105; // RDB Commit Allowed
 pub const QRYINSID: u16 = 0x215B; // Query Instance Identifier
 pub const QRYROWSET: u16 = 0x2156; // Query Rowset Size
+pub const RTNEXTDTA: u16 = 0x2148; // Return Next Data
+pub const RTNEXTALL: u8 = 0x02; // Return row data and all externalized data
 
 // ============================================================
 // FD:OCA

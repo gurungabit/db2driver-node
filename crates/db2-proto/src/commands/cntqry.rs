@@ -16,6 +16,18 @@ pub fn build_cntqry(
     maxblkext: Option<i16>,
     qryrowset: Option<u32>,
 ) -> Vec<u8> {
+    build_cntqry_with_rtnextdta(pkgnamcsn, qryinsid, qryblksz, maxblkext, qryrowset, None)
+}
+
+/// Build CNTQRY with optional RTNEXTDTA for LOB-bearing result sets.
+pub fn build_cntqry_with_rtnextdta(
+    pkgnamcsn: &[u8],
+    qryinsid: Option<&[u8]>,
+    qryblksz: u32,
+    maxblkext: Option<i16>,
+    qryrowset: Option<u32>,
+    rtnextdta: Option<u8>,
+) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(CNTQRY);
     ddm.add_code_point(PKGNAMCSN, pkgnamcsn);
     ddm.add_u32(QRYBLKSZ, qryblksz);
@@ -27,6 +39,9 @@ pub fn build_cntqry(
     }
     if let Some(rows) = qryrowset {
         ddm.add_u32(QRYROWSET, rows);
+    }
+    if let Some(rtnextdta) = rtnextdta {
+        ddm.add_code_point(RTNEXTDTA, &[rtnextdta]);
     }
 
     ddm.build()
@@ -49,5 +64,24 @@ mod tests {
         let bytes = build_cntqry_default(&pkgnamcsn);
         let (obj, _) = DdmObject::parse(&bytes).unwrap();
         assert_eq!(obj.code_point, CNTQRY);
+    }
+
+    #[test]
+    fn test_build_cntqry_with_rtnextdta() {
+        let pkgnamcsn = build_default_pkgnamcsn("TESTDB", 1);
+        let bytes = build_cntqry_with_rtnextdta(
+            &pkgnamcsn,
+            Some(&[0, 0, 0, 1]),
+            32767,
+            Some(-1),
+            Some(1),
+            Some(RTNEXTALL),
+        );
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let params = obj.parameters();
+        assert!(params.iter().any(|p| p.code_point == QRYROWSET));
+        assert!(params
+            .iter()
+            .any(|p| p.code_point == RTNEXTDTA && p.data == [RTNEXTALL]));
     }
 }

@@ -1,4 +1,6 @@
 use std::env;
+use std::time::Duration;
+use tokio::time::timeout;
 use tracing::trace;
 
 use crate::column::ColumnInfo;
@@ -53,14 +55,26 @@ impl Cursor {
 
         let corr_id = inner.next_correlation_id();
         let pkgnamcsn = inner.build_pkgnamcsn_for(inner.package_id, inner.section_number);
+        let has_lobs = descriptors_have_lobs(&self.descriptors);
 
-        let cntqry_data = db2_proto::commands::cntqry::build_cntqry(
-            &pkgnamcsn,
-            self.query_instance_id.as_deref(),
-            db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-            None,
-            None,
-        );
+        let cntqry_data = if has_lobs {
+            db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
+                &pkgnamcsn,
+                self.query_instance_id.as_deref(),
+                db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                Some(-1),
+                Some(1),
+                Some(codepoints::RTNEXTALL),
+            )
+        } else {
+            db2_proto::commands::cntqry::build_cntqry(
+                &pkgnamcsn,
+                self.query_instance_id.as_deref(),
+                db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                None,
+                None,
+            )
+        };
         self.fetch_calls += 1;
 
         let mut writer = DssWriter::new(corr_id);
@@ -68,17 +82,33 @@ impl Cursor {
         let send_buf = writer.finish();
         if debug_hex_enabled() && self.fetch_calls <= 5 {
             eprintln!(
-                "[db2-wire] sending CNTQRY corr={} section={} fetch_size={} bytes={} pending_tail={}",
+                "[db2-wire] sending CNTQRY corr={} section={} fetch_size={} has_lobs={} bytes={} pending_tail={}",
                 corr_id,
                 inner.section_number,
                 self.fetch_size,
+                has_lobs,
                 send_buf.len(),
                 self.pending_row_bytes.len()
             );
         }
         inner.send_bytes(&send_buf).await?;
 
-        let frames = inner.read_reply_frames().await?;
+        let read_timeout = if inner.config.query_timeout.is_zero() {
+            Duration::from_secs(30)
+        } else {
+            inner.config.query_timeout
+        };
+        let frames = match timeout(read_timeout, inner.read_reply_frames()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(Error::Timeout(format!(
+                    "fetch timed out after {:?}; has_lobs={} pending_tail={}",
+                    read_timeout,
+                    has_lobs,
+                    self.pending_row_bytes.len()
+                )));
+            }
+        };
         if debug_hex_enabled() && self.fetch_calls <= 5 {
             eprintln!("[db2-wire] CNTQRY received {} frame(s)", frames.len());
         }
@@ -219,6 +249,10 @@ fn apply_extdta_payloads_to_rows(
             }
         }
     }
+}
+
+fn descriptors_have_lobs(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> bool {
+    descriptors.iter().any(is_lob_descriptor)
 }
 
 fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
