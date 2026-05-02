@@ -534,8 +534,6 @@ impl ClientInner {
             let qryblksz: u32 = 0x0000FFFF;
 
             if params.is_empty() && use_zos_sqlstt {
-                let sqlattr_data =
-                    db2_proto::commands::sqlattr::build_sqlattr_for_read_only_cursor();
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
@@ -549,7 +547,6 @@ impl ClientInner {
 
                 let mut writer = DssWriter::new(corr_id);
                 writer.write_request_next_same_corr(&prpsqlstt_data, true);
-                writer.write_object_same_corr(&sqlattr_data, true);
                 writer.write_object(&sqlstt_data, true);
                 writer.set_correlation_id(self.next_correlation_id());
                 writer.write_request(&opnqry_data, false);
@@ -2531,6 +2528,8 @@ fn ddm_codepoint_name(code_point: u16) -> String {
         codepoints::QRYDSC => "QRYDSC",
         codepoints::QRYDTA => "QRYDTA",
         codepoints::ENDQRYRM => "ENDQRYRM",
+        codepoints::QRYNOPRM => "QRYNOPRM",
+        codepoints::DTAMCHRM => "DTAMCHRM",
         codepoints::RDBUPDRM => "RDBUPDRM",
         codepoints::SQLERRRM => "SQLERRRM",
         codepoints::SYNTAXRM => "SYNTAXRM",
@@ -2573,6 +2572,7 @@ fn reply_codepoint_name(code_point: u16) -> Option<&'static str> {
         codepoints::SQLERRRM => Some("SQLERRRM"),
         codepoints::CMDCHKRM => Some("CMDCHKRM"),
         codepoints::DTAMCHRM => Some("DTAMCHRM"),
+        codepoints::QRYNOPRM => Some("QRYNOPRM"),
         codepoints::OBJNSPRM => Some("OBJNSPRM"),
         codepoints::RDBNACRM => Some("RDBNACRM"),
         _ => None,

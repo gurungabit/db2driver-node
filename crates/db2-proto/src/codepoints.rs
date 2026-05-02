@@ -69,7 +69,9 @@ pub const QRYDTA: u16 = 0x241B; // Query Answer Set Data
 // ============================================================
 pub const SVRCOD: u16 = 0x1149; // Severity Code
 pub const ENDQRYRM: u16 = 0x220B; // End of Query Reply Message
+pub const QRYNOPRM: u16 = 0x2202; // Query Not Open Reply Message
 pub const OPNQRYRM: u16 = 0x2205; // Open Query Complete Reply Message
+pub const DTAMCHRM: u16 = 0x220E; // Data Descriptor Mismatch Reply Message
 pub const RDBUPDRM: u16 = 0x2218; // RDB Update Reply Message
 pub const SYNTAXRM: u16 = 0x124C; // Data Stream Syntax Error Reply Message
 pub const PRCCNVRM: u16 = 0x1245; // Conversational Protocol Error Reply Message
@@ -179,6 +181,5 @@ pub const UOWDSP_ROLLBACK: u16 = 0x0002; // Rollback at end
 // ============================================================
 pub const SQLERRRM: u16 = 0x2213; // SQL Error Reply Message
 pub const CMDCHKRM: u16 = 0x1254; // Command Check Reply Message
-pub const DTAMCHRM: u16 = 0x1218; // Data Descriptor Mismatch Reply Message
 pub const OBJNSPRM: u16 = 0x1253; // Object Not Supported Reply Message
 pub const RDBNACRM: u16 = 0x2204; // RDB Not Accessed Reply Message
