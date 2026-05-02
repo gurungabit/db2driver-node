@@ -1685,24 +1685,69 @@ fn parse_sqldard_columns(obj: &DdmObject) -> Vec<ColumnInfo> {
         Err(_) => return Vec::new(),
     };
 
+    let scanned_names = db2_proto::replies::sqldard::scan_column_names(&obj.data);
+    let has_only_generated_names = dard
+        .columns
+        .iter()
+        .all(|col| is_generated_column_name(&col.name));
+
+    if !scanned_names.is_empty()
+        && (dard.columns.is_empty() || has_only_generated_names)
+        && scanned_names.len() >= dard.columns.len()
+    {
+        if dard.columns.is_empty() {
+            return scanned_names
+                .into_iter()
+                .map(|name| ColumnInfo {
+                    name,
+                    type_name: "Unknown".to_string(),
+                    nullable: true,
+                    precision: None,
+                    scale: None,
+                })
+                .collect();
+        }
+
+        return dard
+            .columns
+            .into_iter()
+            .zip(scanned_names)
+            .map(|(col, name)| column_info_from_sqldard_metadata(col, Some(name)))
+            .collect();
+    }
+
     dard.columns
         .into_iter()
-        .map(|col| ColumnInfo {
-            name: col.name.clone(),
-            type_name: format!("{:?}", col.db2_type),
-            nullable: col.nullable,
-            precision: match col.db2_type {
-                db2_proto::types::Db2Type::DecFloat(digits) => Some(digits as u16),
-                _ if col.precision > 0 => Some(col.precision as u16),
-                _ => None,
-            },
-            scale: if col.scale > 0 {
-                Some(col.scale as u16)
-            } else {
-                None
-            },
-        })
+        .map(|col| column_info_from_sqldard_metadata(col, None))
         .collect()
+}
+
+fn column_info_from_sqldard_metadata(
+    col: db2_proto::replies::sqldard::ColumnMetadata,
+    name_override: Option<String>,
+) -> ColumnInfo {
+    ColumnInfo {
+        name: name_override.unwrap_or_else(|| col.name.clone()),
+        type_name: format!("{:?}", col.db2_type),
+        nullable: col.nullable,
+        precision: match col.db2_type {
+            db2_proto::types::Db2Type::DecFloat(digits) => Some(digits as u16),
+            _ if col.precision > 0 => Some(col.precision as u16),
+            _ => None,
+        },
+        scale: if col.scale > 0 {
+            Some(col.scale as u16)
+        } else {
+            None
+        },
+    }
+}
+
+fn is_generated_column_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("COL") else {
+        return false;
+    };
+    !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn parse_sqldard_descriptors(obj: &DdmObject) -> Vec<db2_proto::fdoca::ColumnDescriptor> {

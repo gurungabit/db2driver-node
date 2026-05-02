@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.44](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.44) (2026-05-02)
+
+### Bug Fixes
+
+- scan z/OS SQLDOPTGRP names without relying on SQLTYPE parsing
+
 ## [0.1.7-zos.43](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.43) (2026-05-02)
 
 ### Bug Fixes

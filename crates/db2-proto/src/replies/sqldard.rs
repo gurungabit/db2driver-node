@@ -316,6 +316,86 @@ fn scan_standard_sqldagroups(data: &[u8]) -> Option<SqlDard> {
     })
 }
 
+/// Scan SQLDARD bytes for column names in SQLDOPTGRP/SQLDXGRP fields without
+/// depending on the SQLTYPE values. Some z/OS replies use descriptor type values
+/// that are not needed for names and can prevent the stricter descriptor parser
+/// from reaching SQLNAME/SQLXNAME.
+pub fn scan_column_names(data: &[u8]) -> Vec<String> {
+    let mut best_names = Vec::new();
+
+    for start in 0..data.len().saturating_sub(20) {
+        let mut offset = start;
+        let mut names = Vec::new();
+
+        for _ in 0..512 {
+            let Some((name, next_offset)) = scan_descriptor_name(data, offset) else {
+                break;
+            };
+            if next_offset <= offset || next_offset > data.len() {
+                break;
+            }
+            names.push(name);
+            offset = next_offset;
+        }
+
+        if names.len() > best_names.len() {
+            best_names = names;
+        }
+    }
+
+    best_names
+}
+
+fn scan_descriptor_name(data: &[u8], descriptor_offset: usize) -> Option<(String, usize)> {
+    let mut offset = descriptor_offset.checked_add(16)?;
+    if offset >= data.len() {
+        return None;
+    }
+
+    let opt_flag = data[offset];
+    offset += 1;
+    if opt_flag == 0xFF {
+        return None;
+    }
+
+    offset = skip_short(data, offset).ok()?;
+
+    let (name_m, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+    let (name_s, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+
+    let direct_name = if is_probably_identifier_text(&name_m) {
+        Some(name_m)
+    } else if is_probably_identifier_text(&name_s) {
+        Some(name_s)
+    } else {
+        None
+    };
+
+    let (_label_m, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+    let (_label_s, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+    let (_comment_m, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+    let (_comment_s, next) = read_len_prefixed_string(data, offset).ok()?;
+    offset = next;
+
+    offset = skip_sqludtgrp(data, offset).ok()?;
+    let (_base_name, _schema_name, column_name, next) = skip_sqldxgrp(data, offset).ok()?;
+    offset = next;
+
+    if let Some(name) = direct_name {
+        return Some((name, offset));
+    }
+    if is_probably_identifier_text(&column_name) {
+        return Some((column_name, offset));
+    }
+
+    None
+}
+
 fn is_generated_column_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("COL") else {
         return false;
@@ -855,6 +935,17 @@ fn is_probably_name(bytes: &[u8]) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'_' | b'$' | b'#' | b'@'))
 }
 
+fn is_probably_identifier_text(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 || is_generated_column_name(trimmed) {
+        return false;
+    }
+
+    trimmed
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'#' | b'@'))
+}
+
 fn decode_text(bytes: &[u8]) -> String {
     if bytes.is_ascii() {
         String::from_utf8_lossy(bytes).to_string()
@@ -1069,6 +1160,30 @@ mod tests {
         assert_eq!(column.name, "BASE_ID");
     }
 
+    #[test]
+    fn test_scan_column_names_ignores_sqltype_values() {
+        let mut data = vec![0; 32];
+        data.extend_from_slice(&standard_descriptor_with_type(
+            "POLICY_ID",
+            0,
+            0,
+            6,
+            0xF101,
+            0,
+        ));
+        data.extend_from_slice(&standard_descriptor_with_type(
+            "POLICY_NUM",
+            0,
+            0,
+            20,
+            0xF101,
+            1200,
+        ));
+
+        let names = scan_column_names(&data);
+        assert_eq!(names, vec!["POLICY_ID", "POLICY_NUM"]);
+    }
+
     fn unnamed_standard_descriptor(length: u64, sql_type: u16, ccsid: u16) -> Vec<u8> {
         let mut descriptor = Vec::new();
         descriptor.extend_from_slice(&0u16.to_be_bytes());
@@ -1103,6 +1218,19 @@ mod tests {
         }
         descriptor.push(0xFF);
         descriptor.push(0xFF);
+        descriptor
+    }
+
+    fn standard_descriptor_with_type(
+        name: &str,
+        precision: u16,
+        scale: u16,
+        length: u64,
+        sql_type: u16,
+        ccsid: u16,
+    ) -> Vec<u8> {
+        let mut descriptor = standard_descriptor(name, precision, scale, length, 496, ccsid);
+        descriptor[12..14].copy_from_slice(&sql_type.to_be_bytes());
         descriptor
     }
 
