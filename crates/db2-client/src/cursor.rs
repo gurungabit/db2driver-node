@@ -55,7 +55,8 @@ impl Cursor {
 
         let corr_id = inner.next_correlation_id();
         let pkgnamcsn = inner.build_pkgnamcsn_for(inner.package_id, inner.section_number);
-        let has_lobs = descriptors_have_lobs(&self.descriptors);
+        let has_lobs =
+            descriptors_have_lobs(&self.descriptors) || column_info_has_lobs(&self.column_info);
 
         let cntqry_data = if has_lobs {
             db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
@@ -102,10 +103,11 @@ impl Cursor {
             Ok(result) => result?,
             Err(_) => {
                 return Err(Error::Timeout(format!(
-                    "fetch timed out after {:?}; has_lobs={} pending_tail={}",
+                    "fetch timed out after {:?}; has_lobs={} pending_tail={} column_types=[{}]",
                     read_timeout,
                     has_lobs,
-                    self.pending_row_bytes.len()
+                    self.pending_row_bytes.len(),
+                    column_type_summary(&self.column_info)
                 )));
             }
         };
@@ -253,6 +255,21 @@ fn apply_extdta_payloads_to_rows(
 
 fn descriptors_have_lobs(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> bool {
     descriptors.iter().any(is_lob_descriptor)
+}
+
+fn column_info_has_lobs(columns: &[ColumnInfo]) -> bool {
+    columns.iter().any(|column| {
+        let ty = column.type_name.to_ascii_lowercase();
+        ty.contains("clob") || ty.contains("blob")
+    })
+}
+
+fn column_type_summary(columns: &[ColumnInfo]) -> String {
+    columns
+        .iter()
+        .map(|column| format!("{}:{}", column.name, column.type_name))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
