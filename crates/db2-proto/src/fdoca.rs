@@ -598,7 +598,28 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
             let s = decode_character_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Char(s), flen))
         }
-        Db2Type::VarChar(_) | Db2Type::LongVarChar => {
+        Db2Type::VarChar(len) => {
+            if len & 0x8000 != 0 {
+                return decode_externalized_lob_header(data, *len, true);
+            }
+            if data.len() < 2 {
+                return Err(ProtoError::BufferTooShort {
+                    expected: 2,
+                    actual: data.len(),
+                });
+            }
+            let str_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+            let total = 2 + str_len;
+            if data.len() < total {
+                return Err(ProtoError::BufferTooShort {
+                    expected: total,
+                    actual: data.len(),
+                });
+            }
+            let s = decode_character_bytes(&data[2..total], col.ccsid);
+            Ok((Db2Value::VarChar(s), total))
+        }
+        Db2Type::LongVarChar => {
             if data.len() < 2 {
                 return Err(ProtoError::BufferTooShort {
                     expected: 2,
@@ -800,7 +821,10 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
             let s = decode_graphic_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Char(s), flen))
         }
-        Db2Type::VarGraphic(_) => {
+        Db2Type::VarGraphic(len) => {
+            if len & 0x8000 != 0 {
+                return decode_externalized_lob_header(data, *len, true);
+            }
             if data.len() < 2 {
                 return Err(ProtoError::BufferTooShort {
                     expected: 2,
@@ -819,6 +843,39 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
             Ok((Db2Value::VarChar(s), total))
         }
         Db2Type::Null => Ok((Db2Value::Null, 0)),
+    }
+}
+
+fn decode_externalized_lob_header(
+    data: &[u8],
+    descriptor_len: u16,
+    is_character: bool,
+) -> Result<(Db2Value, usize)> {
+    let descriptor_header_len = (descriptor_len & 0x7FFF) as usize;
+    let (header_start, header_len, total) = if data.len() >= 2 {
+        let value_len = u16::from_be_bytes([data[0], data[1]]);
+        if value_len & 0x8000 != 0 {
+            let header_len = (value_len & 0x7FFF) as usize;
+            (2usize, header_len, 2 + header_len)
+        } else {
+            (0usize, descriptor_header_len, descriptor_header_len)
+        }
+    } else {
+        (0usize, descriptor_header_len, descriptor_header_len)
+    };
+
+    if data.len() < total {
+        return Err(ProtoError::BufferTooShort {
+            expected: total,
+            actual: data.len(),
+        });
+    }
+    let header = &data[header_start..header_start + header_len];
+
+    if is_character {
+        Ok((Db2Value::Clob(format_lob_locator(header)), total))
+    } else {
+        Ok((Db2Value::Blob(header.to_vec()), total))
     }
 }
 
@@ -1170,5 +1227,30 @@ mod tests {
         let (values, consumed) = decode_row(b"hello clob!", &cols).unwrap();
         assert_eq!(consumed, 11);
         assert_eq!(values[0], Db2Value::Clob("hello clob!".to_string()));
+    }
+
+    #[test]
+    fn test_high_bit_varchar_consumes_externalized_lob_header() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x32,
+            length: 0x8009,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 1208,
+            db2_type: Db2Type::VarChar(0x8009),
+            byte_order: ByteOrder::BigEndian,
+        }];
+
+        let data = [
+            0x80, 0x09, 0x02, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78,
+        ];
+        let (values, consumed) = decode_row(&data, &cols).unwrap();
+        assert_eq!(consumed, 11);
+        assert_eq!(
+            values[0],
+            Db2Value::Clob("LOB locator 0x020000000012345678".to_string())
+        );
     }
 }

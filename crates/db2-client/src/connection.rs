@@ -1098,16 +1098,27 @@ impl ClientInner {
                 let mut stalled_fetches = 0usize;
                 loop {
                     let pending_before = cursor.pending_row_bytes.len();
-                    let (more_rows, done) = cursor.fetch_next_from(self).await?;
+                    let (more_rows, done, more_extdta_payloads) =
+                        cursor.fetch_next_from(self).await?;
                     let pending_after = cursor.pending_row_bytes.len();
-                    let made_progress =
-                        !more_rows.is_empty() || done || pending_after != pending_before;
+                    let made_progress = !more_rows.is_empty()
+                        || !more_extdta_payloads.is_empty()
+                        || done
+                        || pending_after != pending_before;
                     if made_progress {
                         stalled_fetches = 0;
                     } else {
                         stalled_fetches += 1;
                     }
                     rows.extend(more_rows);
+                    if !more_extdta_payloads.is_empty() {
+                        apply_extdta_payloads_to_rows(
+                            &mut rows,
+                            &cursor.descriptors,
+                            &more_extdta_payloads,
+                        );
+                        extdta_payloads.extend(more_extdta_payloads);
+                    }
                     if done {
                         break;
                     }
@@ -3230,7 +3241,7 @@ fn apply_extdta_payloads_to_rows(
             let Some(descriptor) = descriptors.get(column_index) else {
                 continue;
             };
-            if !is_lob_descriptor(descriptor) || !value_needs_extdta(value) {
+            if !descriptor_uses_extdta(descriptor) || !value_needs_extdta(value) {
                 continue;
             }
             let Some(payload) = extdta_payloads.get(extdta_index) else {
@@ -3248,7 +3259,9 @@ fn apply_extdta_payloads_to_rows(
                 | db2_proto::types::Db2Type::DbClob
                 | db2_proto::types::Db2Type::ClobLocator
                 | db2_proto::types::Db2Type::DbClobLocator
-                | db2_proto::types::Db2Type::LobChar(_) => {
+                | db2_proto::types::Db2Type::LobChar(_)
+                | db2_proto::types::Db2Type::VarChar(_)
+                | db2_proto::types::Db2Type::VarGraphic(_) => {
                     *value = db2_proto::types::Db2Value::Clob(
                         String::from_utf8_lossy(payload).to_string(),
                     );
@@ -3271,6 +3284,18 @@ fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
             | db2_proto::types::Db2Type::LobBytes(_)
             | db2_proto::types::Db2Type::LobChar(_)
     )
+}
+
+fn descriptor_uses_extdta(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    is_lob_descriptor(descriptor)
+        || matches!(
+            descriptor.db2_type,
+            db2_proto::types::Db2Type::VarChar(len)
+                | db2_proto::types::Db2Type::VarGraphic(len)
+                | db2_proto::types::Db2Type::LobBytes(len)
+                | db2_proto::types::Db2Type::LobChar(len)
+                if len >= 32_768
+        )
 }
 
 fn value_needs_extdta(value: &db2_proto::types::Db2Value) -> bool {

@@ -44,13 +44,13 @@ impl Cursor {
     }
 
     /// Fetch the next batch of rows from the server via the given ClientInner.
-    /// Returns (rows, end_of_query).
+    /// Returns (rows, end_of_query, externalized LOB payloads).
     pub async fn fetch_next_from(
         &mut self,
         inner: &mut ClientInner,
-    ) -> Result<(Vec<Row>, bool), Error> {
+    ) -> Result<(Vec<Row>, bool, Vec<Vec<u8>>), Error> {
         if self.closed {
-            return Ok((Vec::new(), true));
+            return Ok((Vec::new(), true, Vec::new()));
         }
 
         let corr_id = inner.next_correlation_id();
@@ -59,12 +59,13 @@ impl Cursor {
             || column_info_needs_lob_fetch(&self.column_info);
 
         let cntqry_data = if has_lobs {
-            db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
+            db2_proto::commands::cntqry::build_cntqry_with_rdbnam_and_rtnextdta(
+                &inner.config.database,
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
                 db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-                Some(-1),
-                Some(1),
+                Some(0),
+                None,
                 Some(codepoints::RTNEXTALL),
             )
         } else {
@@ -205,7 +206,7 @@ impl Cursor {
             );
         }
 
-        Ok((rows, end_of_query))
+        Ok((rows, end_of_query, extdta_payloads))
     }
 }
 
@@ -224,7 +225,7 @@ fn apply_extdta_payloads_to_rows(
             let Some(descriptor) = descriptors.get(column_index) else {
                 continue;
             };
-            if !is_lob_descriptor(descriptor) || !value_needs_extdta(value) {
+            if !descriptor_uses_extdta(descriptor) || !value_needs_extdta(value) {
                 continue;
             }
             let Some(payload) = extdta_payloads.get(extdta_index) else {
@@ -242,7 +243,9 @@ fn apply_extdta_payloads_to_rows(
                 | db2_proto::types::Db2Type::DbClob
                 | db2_proto::types::Db2Type::ClobLocator
                 | db2_proto::types::Db2Type::DbClobLocator
-                | db2_proto::types::Db2Type::LobChar(_) => {
+                | db2_proto::types::Db2Type::LobChar(_)
+                | db2_proto::types::Db2Type::VarChar(_)
+                | db2_proto::types::Db2Type::VarGraphic(_) => {
                     *value = db2_proto::types::Db2Value::Clob(
                         String::from_utf8_lossy(payload).to_string(),
                     );
@@ -302,6 +305,10 @@ fn is_lob_like_inline_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor
         | db2_proto::types::Db2Type::LobChar(len) => len >= 32_704,
         _ => false,
     }
+}
+
+fn descriptor_uses_extdta(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    is_lob_descriptor(descriptor) || is_lob_like_inline_descriptor(descriptor)
 }
 
 fn value_needs_extdta(value: &db2_proto::types::Db2Value) -> bool {

@@ -1,4 +1,5 @@
 //! Build CNTQRY (Continue Query) command.
+use crate::codepage::pad_rdbnam;
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
@@ -28,7 +29,48 @@ pub fn build_cntqry_with_rtnextdta(
     qryrowset: Option<u32>,
     rtnextdta: Option<u8>,
 ) -> Vec<u8> {
+    build_cntqry_inner(
+        None, pkgnamcsn, qryinsid, qryblksz, maxblkext, qryrowset, rtnextdta,
+    )
+}
+
+/// Build CNTQRY with RDBNAM and optional RTNEXTDTA.
+///
+/// Db2 for z/OS LOB continuation flows use the full CNTQRY form:
+/// RDBNAM, PKGNAMCSN, QRYBLKSZ, QRYINSID, RTNEXTDTA.
+pub fn build_cntqry_with_rdbnam_and_rtnextdta(
+    rdbnam: &str,
+    pkgnamcsn: &[u8],
+    qryinsid: Option<&[u8]>,
+    qryblksz: u32,
+    maxblkext: Option<i16>,
+    qryrowset: Option<u32>,
+    rtnextdta: Option<u8>,
+) -> Vec<u8> {
+    build_cntqry_inner(
+        Some(rdbnam),
+        pkgnamcsn,
+        qryinsid,
+        qryblksz,
+        maxblkext,
+        qryrowset,
+        rtnextdta,
+    )
+}
+
+fn build_cntqry_inner(
+    rdbnam: Option<&str>,
+    pkgnamcsn: &[u8],
+    qryinsid: Option<&[u8]>,
+    qryblksz: u32,
+    maxblkext: Option<i16>,
+    qryrowset: Option<u32>,
+    rtnextdta: Option<u8>,
+) -> Vec<u8> {
     let mut ddm = DdmBuilder::new(CNTQRY);
+    if let Some(rdbnam) = rdbnam {
+        ddm.add_code_point(RDBNAM, &pad_rdbnam(rdbnam));
+    }
     ddm.add_code_point(PKGNAMCSN, pkgnamcsn);
     ddm.add_u32(QRYBLKSZ, qryblksz);
     if let Some(ext) = maxblkext {
@@ -83,5 +125,26 @@ mod tests {
         assert!(params
             .iter()
             .any(|p| p.code_point == RTNEXTDTA && p.data == [RTNEXTALL]));
+    }
+
+    #[test]
+    fn test_build_cntqry_with_rdbnam_and_rtnextdta() {
+        let pkgnamcsn = build_default_pkgnamcsn("TESTDB", 1);
+        let bytes = build_cntqry_with_rdbnam_and_rtnextdta(
+            "TESTDB",
+            &pkgnamcsn,
+            Some(&[0, 0, 0, 1]),
+            32767,
+            Some(0),
+            None,
+            Some(RTNEXTALL),
+        );
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+        let params = obj.parameters();
+        assert_eq!(params[0].code_point, RDBNAM);
+        assert!(params
+            .iter()
+            .any(|p| p.code_point == RTNEXTDTA && p.data == [RTNEXTALL]));
+        assert!(!params.iter().any(|p| p.code_point == QRYROWSET));
     }
 }
