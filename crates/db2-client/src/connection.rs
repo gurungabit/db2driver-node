@@ -994,13 +994,34 @@ impl ClientInner {
                 );
                 cursor.pending_row_bytes = std::mem::take(&mut pending_row_bytes);
 
+                let mut stalled_fetches = 0usize;
                 loop {
+                    let pending_before = cursor.pending_row_bytes.len();
                     let (more_rows, done) = cursor.fetch_next_from(self).await?;
+                    let pending_after = cursor.pending_row_bytes.len();
+                    let made_progress =
+                        !more_rows.is_empty() || done || pending_after != pending_before;
+                    if made_progress {
+                        stalled_fetches = 0;
+                    } else {
+                        stalled_fetches += 1;
+                    }
                     rows.extend(more_rows);
                     if done {
                         break;
                     }
+                    if stalled_fetches >= 3 {
+                        return Err(Error::Protocol(format!(
+                            "query fetch stalled while decoding row data; pending_tail={} progress={}",
+                            pending_after,
+                            db2_proto::fdoca::describe_decode_progress(
+                                &cursor.pending_row_bytes,
+                                &cursor.descriptors
+                            )
+                        )));
+                    }
                 }
+                pending_row_bytes = std::mem::take(&mut cursor.pending_row_bytes);
             }
         }
 
@@ -1061,6 +1082,19 @@ impl ClientInner {
                 sqldard_descriptors.as_ref().map(|v| v.len()).unwrap_or(0),
                 pending_row_bytes.len()
             );
+        }
+
+        if end_of_query && !pending_row_bytes.is_empty() {
+            let progress = active_descriptors
+                .map(|descriptors| {
+                    db2_proto::fdoca::describe_decode_progress(&pending_row_bytes, descriptors)
+                })
+                .unwrap_or_else(|| "no active descriptors".to_string());
+            return Err(Error::Protocol(format!(
+                "query ended with undecoded row data; pending_tail={} progress={}",
+                pending_row_bytes.len(),
+                progress
+            )));
         }
 
         Ok(QueryResult::with_rows_and_diagnostics(
@@ -1969,6 +2003,7 @@ fn compact_sqlda_db2_type(
         492 => Db2Type::BigInt,
         496 => Db2Type::Integer,
         500 => Db2Type::SmallInt,
+        904 => Db2Type::RowId(raw_length.min(u16::MAX as u64) as u16),
         908 => Db2Type::VarBinary(raw_length.min(u16::MAX as u64) as u16),
         912 => Db2Type::Binary(raw_length.min(u16::MAX as u64) as u16),
         988 => Db2Type::Xml,
@@ -2094,6 +2129,7 @@ fn encode_parameter_value(
         }
         Db2Type::Binary(len) => encode_fixed_binary(value, *len as usize)?,
         Db2Type::VarBinary(_) | Db2Type::Blob => encode_ld_binary(value)?,
+        Db2Type::RowId(len) => encode_fixed_string(value, *len as usize, descriptor.ccsid)?,
         Db2Type::Date => encode_exact_string(value, 10, descriptor.ccsid)?,
         Db2Type::Time => encode_exact_string(value, 8, descriptor.ccsid)?,
         Db2Type::Timestamp => encode_timestamp(value, descriptor.ccsid)?,
@@ -2199,6 +2235,7 @@ fn encode_text_bytes(value: &db2_proto::types::Db2Value, ccsid: u16) -> Result<V
         | db2_proto::types::Db2Value::Time(v)
         | db2_proto::types::Db2Value::Timestamp(v)
         | db2_proto::types::Db2Value::Decimal(v)
+        | db2_proto::types::Db2Value::RowId(v)
         | db2_proto::types::Db2Value::Xml(v) => v.as_str(),
         _ => {
             return Err(Error::Other(format!(
@@ -2265,7 +2302,8 @@ fn input_length_for(
         | Db2Type::Binary(len)
         | Db2Type::VarBinary(len)
         | Db2Type::Graphic(len)
-        | Db2Type::VarGraphic(len) => *len,
+        | Db2Type::VarGraphic(len)
+        | Db2Type::RowId(len) => *len,
         Db2Type::LongVarChar | Db2Type::Clob | Db2Type::Xml => {
             if length == 0 {
                 32767
@@ -2335,6 +2373,7 @@ fn input_drda_type_for(db2_type: &db2_proto::types::Db2Type, ccsid: u16, nullabl
         }
         Db2Type::Binary(_) => 0x26,
         Db2Type::VarBinary(_) | Db2Type::Blob => 0x28,
+        Db2Type::RowId(_) => 0x26,
         Db2Type::Date => 0x20,
         Db2Type::Time => 0x22,
         Db2Type::Timestamp => 0x24,

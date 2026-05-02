@@ -95,6 +95,7 @@ pub enum Db2Type {
     Graphic(u16),
     VarGraphic(u16),
     DbClob,
+    RowId(u16),
     Boolean,
     Xml,
     Null,
@@ -155,6 +156,7 @@ impl Db2Type {
             Db2Type::Boolean => Some(1),
             Db2Type::Binary(len) => Some(*len as usize),
             Db2Type::Graphic(len) => Some(*len as usize * 2),
+            Db2Type::RowId(len) => Some(*len as usize),
             _ => None, // variable-length
         }
     }
@@ -175,6 +177,7 @@ pub enum Db2Value {
     Binary(Vec<u8>),
     Blob(Vec<u8>),
     Clob(String),
+    RowId(String),
     Date(String),
     Time(String),
     Timestamp(String),
@@ -220,6 +223,7 @@ impl Db2Value {
             | Db2Value::Time(s)
             | Db2Value::Timestamp(s)
             | Db2Value::Decimal(s)
+            | Db2Value::RowId(s)
             | Db2Value::Xml(s) => Some(s),
             _ => None,
         }
@@ -547,6 +551,12 @@ pub fn encode_db2_value(value: &Db2Value) -> Vec<u8> {
             let bytes = s.as_bytes();
             let mut out = Vec::with_capacity(2 + bytes.len());
             out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+            out.extend_from_slice(bytes);
+            out
+        }
+        Db2Value::RowId(s) => {
+            let bytes = s.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
             out.extend_from_slice(bytes);
             out
         }

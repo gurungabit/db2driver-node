@@ -168,6 +168,7 @@ impl ToSql for Db2Value {
             Db2Value::Time(_) => Db2Type::Time,
             Db2Value::Timestamp(_) => Db2Type::Timestamp,
             Db2Value::Boolean(_) => Db2Type::Boolean,
+            Db2Value::RowId(v) => Db2Type::RowId(v.len() as u16),
             Db2Value::Xml(_) => Db2Type::Xml,
         }
     }
@@ -205,7 +206,7 @@ pub(crate) fn encode_db2_value(value: &Db2Value) -> Vec<u8> {
             // Encode as varchar for simplicity; a full impl would use packed BCD
             encode_varchar(s.as_bytes())
         }
-        Db2Value::Char(s) | Db2Value::VarChar(s) | Db2Value::Clob(s) => {
+        Db2Value::Char(s) | Db2Value::VarChar(s) | Db2Value::Clob(s) | Db2Value::RowId(s) => {
             encode_varchar(s.as_bytes())
         }
         Db2Value::Date(s) | Db2Value::Time(s) | Db2Value::Timestamp(s) => {

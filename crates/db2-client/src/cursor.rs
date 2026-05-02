@@ -14,7 +14,7 @@ use db2_proto::dss::DssWriter;
 /// detects ENDQRYRM to know when the result set is exhausted.
 pub(crate) struct Cursor {
     column_info: Vec<ColumnInfo>,
-    descriptors: Vec<db2_proto::fdoca::ColumnDescriptor>,
+    pub(crate) descriptors: Vec<db2_proto::fdoca::ColumnDescriptor>,
     query_instance_id: Option<Vec<u8>>,
     fetch_size: u32,
     fetch_calls: usize,

@@ -1178,6 +1178,7 @@ fn db2_type_from_sqlda(sql_type: u16, raw_length: u64, precision: u8, scale: u8)
         492 => Db2Type::BigInt,
         496 => Db2Type::Integer,
         500 => Db2Type::SmallInt,
+        904 => Db2Type::RowId(raw_length.min(u16::MAX as u64) as u16),
         908 => Db2Type::VarBinary(raw_length.min(u16::MAX as u64) as u16),
         912 => Db2Type::Binary(raw_length.min(u16::MAX as u64) as u16),
         988 => Db2Type::Xml,
@@ -1202,6 +1203,7 @@ fn normalized_length(sql_type: u16, raw_length: u64, precision: u8, db2_type: &D
         492 => 8,
         496 => 4,
         500 => 2,
+        904 => raw_length.min(u16::MAX as u64) as u16,
         _ => raw_length.min(u16::MAX as u64) as u16,
     }
 }
@@ -1229,6 +1231,7 @@ fn drda_type_for(db2_type: &Db2Type, nullable: bool) -> u8 {
         Db2Type::Graphic(_) => DRDA_TYPE_GRAPHIC,
         Db2Type::VarGraphic(_) => DRDA_TYPE_VARGRAPH,
         Db2Type::DbClob => DRDA_TYPE_DBCLOB,
+        Db2Type::RowId(_) => DRDA_TYPE_BINARY,
         Db2Type::Boolean => DRDA_TYPE_BOOLEAN,
         Db2Type::Xml => DRDA_TYPE_XML,
         Db2Type::Null => DRDA_TYPE_NVARCHAR,

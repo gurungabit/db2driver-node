@@ -243,7 +243,15 @@ fn public_type_name(type_name: &str) -> String {
     if let Some(len) = parse_enum_length(type_name, "VarGraphic") {
         return format!("VARCHAR({len})");
     }
-    type_name.to_string()
+    if let Some(len) = parse_enum_length(type_name, "RowId") {
+        return format!("ROWID({len})");
+    }
+    match type_name {
+        "Blob" => "BLOB".to_string(),
+        "Clob" => "CLOB".to_string(),
+        "DbClob" => "DBCLOB".to_string(),
+        _ => type_name.to_string(),
+    }
 }
 
 fn raw_db2_type_name(raw: &str, public: &str) -> Option<String> {
@@ -251,6 +259,14 @@ fn raw_db2_type_name(raw: &str, public: &str) -> Option<String> {
         format!("GRAPHIC({len})")
     } else if let Some(len) = parse_enum_length(raw, "VarGraphic") {
         format!("VARGRAPHIC({len})")
+    } else if let Some(len) = parse_enum_length(raw, "RowId") {
+        format!("ROWID({len})")
+    } else if raw == "Blob" {
+        "BLOB".to_string()
+    } else if raw == "Clob" {
+        "CLOB".to_string()
+    } else if raw == "DbClob" {
+        "DBCLOB".to_string()
     } else {
         raw.to_string()
     };
@@ -463,6 +479,9 @@ mod tests {
             raw_db2_type_name("VarGraphic(45)", "VARCHAR(45)"),
             Some("VARGRAPHIC(45)".to_string())
         );
+        assert_eq!(public_type_name("Clob"), "CLOB");
+        assert_eq!(public_type_name("RowId(40)"), "ROWID(40)");
+        assert_eq!(raw_db2_type_name("RowId(40)", "ROWID(40)"), None);
         assert_eq!(raw_db2_type_name("Integer", "Integer"), None);
     }
 }

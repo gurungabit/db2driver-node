@@ -149,6 +149,7 @@ impl FromDb2Value for String {
             db2_proto::types::Db2Value::Timestamp(v) => Some(v.clone()),
             db2_proto::types::Db2Value::Xml(v) => Some(v.clone()),
             db2_proto::types::Db2Value::Decimal(v) => Some(v.clone()),
+            db2_proto::types::Db2Value::RowId(v) => Some(v.clone()),
             _ => None,
         }
     }

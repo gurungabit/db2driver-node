@@ -688,12 +688,26 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
             Ok((Db2Value::Boolean(data[0] != 0), 1))
         }
         Db2Type::Blob | Db2Type::Clob | Db2Type::DbClob | Db2Type::Xml => {
-            // LOB types use a 4-byte length prefix
+            // LOB values may be materialized inline as a 4-byte length plus
+            // bytes, or represented by a 4-byte server-side LOB locator.
             if data.len() < 4 {
                 return Err(ProtoError::BufferTooShort {
                     expected: 4,
                     actual: data.len(),
                 });
+            }
+            if col.length == 0
+                && matches!(
+                    col.db2_type,
+                    Db2Type::Blob | Db2Type::Clob | Db2Type::DbClob
+                )
+            {
+                let locator = format_lob_locator(&data[..4]);
+                return match &col.db2_type {
+                    Db2Type::Blob => Ok((Db2Value::Blob(data[..4].to_vec()), 4)),
+                    Db2Type::Clob | Db2Type::DbClob => Ok((Db2Value::Clob(locator), 4)),
+                    _ => unreachable!(),
+                };
             }
             let lob_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
             let total = 4 + lob_len;
@@ -715,6 +729,16 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                 }
                 _ => unreachable!(),
             }
+        }
+        Db2Type::RowId(len) => {
+            let flen = *len as usize;
+            if data.len() < flen {
+                return Err(ProtoError::BufferTooShort {
+                    expected: flen,
+                    actual: data.len(),
+                });
+            }
+            Ok((Db2Value::RowId(format_rowid(&data[..flen])), flen))
         }
         Db2Type::Graphic(len) => {
             let flen = *len as usize;
@@ -747,6 +771,22 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
         }
         Db2Type::Null => Ok((Db2Value::Null, 0)),
     }
+}
+
+fn format_lob_locator(bytes: &[u8]) -> String {
+    format!("LOB locator 0x{}", bytes_to_hex(bytes))
+}
+
+fn format_rowid(bytes: &[u8]) -> String {
+    format!("0x{}", bytes_to_hex(bytes))
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{:02X}", byte));
+    }
+    out
 }
 
 fn decode_character_bytes(data: &[u8], ccsid: u16) -> String {
@@ -978,5 +1018,61 @@ mod tests {
         assert_eq!(consumed, row_data.len());
         assert_eq!(values[0], Db2Value::Char("AB".to_string()));
         assert_eq!(values[1], Db2Value::VarChar("CD".to_string()));
+    }
+
+    #[test]
+    fn test_clob_locator_consumes_four_bytes_when_lob_length_is_unknown() {
+        let cols = vec![
+            ColumnDescriptor {
+                column_index: 0,
+                drda_type: 0xCA,
+                length: 0,
+                precision: 0,
+                scale: 0,
+                nullable: false,
+                ccsid: 1208,
+                db2_type: Db2Type::Clob,
+                byte_order: ByteOrder::BigEndian,
+            },
+            ColumnDescriptor {
+                column_index: 1,
+                drda_type: 0x02,
+                length: 4,
+                precision: 0,
+                scale: 0,
+                nullable: false,
+                ccsid: 0,
+                db2_type: Db2Type::Integer,
+                byte_order: ByteOrder::BigEndian,
+            },
+        ];
+
+        let row_data = vec![0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x2A];
+        let (values, consumed) = decode_row(&row_data, &cols).unwrap();
+        assert_eq!(consumed, row_data.len());
+        assert_eq!(
+            values[0],
+            Db2Value::Clob("LOB locator 0x12345678".to_string())
+        );
+        assert_eq!(values[1], Db2Value::Integer(42));
+    }
+
+    #[test]
+    fn test_rowid_decodes_as_hex_string() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x60,
+            length: 4,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 0,
+            db2_type: Db2Type::RowId(4),
+            byte_order: ByteOrder::BigEndian,
+        }];
+
+        let (values, consumed) = decode_row(&[0xDE, 0xAD, 0xBE, 0xEF], &cols).unwrap();
+        assert_eq!(consumed, 4);
+        assert_eq!(values[0], Db2Value::RowId("0xDEADBEEF".to_string()));
     }
 }
