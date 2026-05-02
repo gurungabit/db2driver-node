@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.51](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.51) (2026-05-02)
+
+### Bug Fixes
+
+- automatically materialize z/OS CLOB result columns as string values
+
 ## [0.1.7-zos.50](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.50) (2026-05-02)
 
 ### Bug Fixes

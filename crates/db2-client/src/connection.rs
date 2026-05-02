@@ -519,7 +519,7 @@ impl ClientInner {
 
         let is_query = sql_is_query(sql);
         let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
-        let use_zos_cursor_attributes = is_query && use_zos_sqlstt;
+        let use_zos_cursor_attributes = is_query && use_zos_sqlstt && !params.is_empty();
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         let mut input_descriptors = Vec::new();
 
@@ -532,35 +532,6 @@ impl ClientInner {
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
             let qryblksz: u32 = 0x0000FFFF;
-
-            if params.is_empty() && use_zos_sqlstt {
-                let opnqry_data = {
-                    let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
-                    ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
-                    ddm.add_u32(
-                        codepoints::QRYBLKSZ,
-                        db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-                    );
-                    ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
-                    ddm.build()
-                };
-
-                let mut writer = DssWriter::new(corr_id);
-                writer.write_request_next_same_corr(&prpsqlstt_data, true);
-                writer.write_object(&sqlstt_data, true);
-                writer.set_correlation_id(self.next_correlation_id());
-                writer.write_request(&opnqry_data, false);
-
-                let send_buf = writer.finish();
-                self.send_bytes(&send_buf).await?;
-
-                let frames = self.read_execute_reply_frames().await?;
-                let column_info = self.parse_prepare_reply(&frames)?;
-                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
-                return self
-                    .process_query_reply(&frames, &column_info, Some(&result_descriptors))
-                    .await;
-            }
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -577,6 +548,12 @@ impl ClientInner {
             let frames = self.read_prepare_reply_frames().await?;
             let column_info = self.parse_prepare_reply(&frames)?;
             let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+            if use_zos_sqlstt {
+                if let Some(rewritten_sql) = rewrite_zos_lob_select(sql, &column_info) {
+                    ensure_sqlstt_sql_len(&rewritten_sql)?;
+                    return Box::pin(self.execute_query(&rewritten_sql, params)).await;
+                }
+            }
 
             if params.is_empty() {
                 let corr_id = self.next_correlation_id();
@@ -1608,6 +1585,8 @@ impl Client {
 // ============================================================
 
 const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
+const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
+const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
 
 pub(crate) fn ensure_sqlstt_sql_len(sql: &str) -> Result<(), Error> {
     let sql_len = sql.len();
@@ -1632,6 +1611,49 @@ pub(crate) fn build_sqlstt_for_server(sql: &str, use_zos_format: bool) -> Vec<u8
     } else {
         db2_proto::commands::sqlstt::build_sqlstt(sql)
     }
+}
+
+fn rewrite_zos_lob_select(sql: &str, columns: &[ColumnInfo]) -> Option<String> {
+    if columns.is_empty() || !sql_is_query(sql) {
+        return None;
+    }
+
+    let mut has_materialized_lob = false;
+    let projection = columns
+        .iter()
+        .map(|column| {
+            let ident = quote_sql_identifier(&column.name);
+            match column.type_name.as_str() {
+                "Clob" => {
+                    has_materialized_lob = true;
+                    format!(
+                        "CAST(SUBSTR({ident}, 1, {ZOS_CLOB_INLINE_LIMIT}) AS VARCHAR({ZOS_CLOB_INLINE_LIMIT})) AS {ident}"
+                    )
+                }
+                "DbClob" => {
+                    has_materialized_lob = true;
+                    format!(
+                        "CAST(SUBSTR({ident}, 1, {ZOS_DBCLOB_INLINE_LIMIT}) AS VARGRAPHIC({ZOS_DBCLOB_INLINE_LIMIT})) AS {ident}"
+                    )
+                }
+                _ => ident,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if !has_materialized_lob {
+        return None;
+    }
+
+    Some(format!(
+        "SELECT {} FROM ({}) AS DB2NODE_LOB_SRC",
+        projection.join(", "),
+        sql.trim().trim_end_matches(';').trim()
+    ))
+}
+
+fn quote_sql_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 pub(crate) fn build_sqldta(
@@ -2925,4 +2947,45 @@ pub(crate) fn sql_is_query(sql: &str) -> bool {
         || trimmed.starts_with("WITH")
         || trimmed.starts_with("VALUES")
         || trimmed.starts_with("CALL")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrite_zos_lob_select_materializes_clob_columns() {
+        let columns = vec![
+            ColumnInfo::new("INSP_RPT_ID".to_string(), "Decimal".to_string(), false),
+            ColumnInfo::new("INSP_RPT_DETL_DOC".to_string(), "Clob".to_string(), true),
+            ColumnInfo::new(
+                "DB2_GENERATED_ROWID_FOR_LOBS".to_string(),
+                "RowId(40)".to_string(),
+                false,
+            ),
+        ];
+
+        let rewritten = rewrite_zos_lob_select(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY",
+            &columns,
+        )
+        .unwrap();
+
+        assert!(rewritten.contains(
+            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 32704) AS VARCHAR(32704)) AS \"INSP_RPT_DETL_DOC\""
+        ));
+        assert!(rewritten.contains("\"DB2_GENERATED_ROWID_FOR_LOBS\""));
+        assert!(rewritten.ends_with("AS DB2NODE_LOB_SRC"));
+    }
+
+    #[test]
+    fn rewrite_zos_lob_select_ignores_non_lob_columns() {
+        let columns = vec![ColumnInfo::new(
+            "PROP_ID".to_string(),
+            "Decimal".to_string(),
+            false,
+        )];
+
+        assert!(rewrite_zos_lob_select("SELECT PROP_ID FROM T", &columns).is_none());
+    }
 }
