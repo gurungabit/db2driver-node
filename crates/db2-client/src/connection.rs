@@ -1124,12 +1124,13 @@ impl ClientInner {
                     }
                     if stalled_fetches >= 3 {
                         return Err(Error::Protocol(format!(
-                            "query fetch stalled while decoding row data; pending_tail={} progress={}",
+                            "query fetch stalled while decoding row data; pending_tail={} progress={} last_fetch=[{}]",
                             pending_after,
                             db2_proto::fdoca::describe_decode_progress(
                                 &cursor.pending_row_bytes,
                                 &cursor.descriptors
-                            )
+                            ),
+                            cursor.last_fetch_diagnostics.join("; ")
                         )));
                     }
                 }

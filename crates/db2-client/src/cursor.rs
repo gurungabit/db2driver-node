@@ -21,6 +21,7 @@ pub(crate) struct Cursor {
     fetch_size: u32,
     fetch_calls: usize,
     pub(crate) pending_row_bytes: Vec<u8>,
+    pub(crate) last_fetch_diagnostics: Vec<String>,
     closed: bool,
 }
 
@@ -39,6 +40,7 @@ impl Cursor {
             fetch_size,
             fetch_calls: 0,
             pending_row_bytes: Vec::new(),
+            last_fetch_diagnostics: Vec::new(),
             closed: false,
         }
     }
@@ -58,9 +60,13 @@ impl Cursor {
         let has_lobs = descriptors_need_lob_fetch(&self.descriptors)
             || column_info_needs_lob_fetch(&self.column_info);
 
+        self.last_fetch_diagnostics.clear();
         let cntqry_data = if has_lobs {
-            db2_proto::commands::cntqry::build_cntqry_with_rdbnam_and_rtnextdta(
-                &inner.config.database,
+            self.last_fetch_diagnostics.push(
+                "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset=none rtnextdta=RTNEXTALL"
+                    .to_string(),
+            );
+            db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
                 db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
@@ -69,6 +75,10 @@ impl Cursor {
                 Some(codepoints::RTNEXTALL),
             )
         } else {
+            self.last_fetch_diagnostics.push(
+                "cntqry_request has_lobs=false rdbnam=false maxblkext=none qryrowset=none rtnextdta=none"
+                    .to_string(),
+            );
             db2_proto::commands::cntqry::build_cntqry(
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
@@ -104,11 +114,12 @@ impl Cursor {
             Ok(result) => result?,
             Err(_) => {
                 return Err(Error::Timeout(format!(
-                    "fetch timed out after {:?}; has_lobs={} pending_tail={} column_types=[{}]",
+                    "fetch timed out after {:?}; has_lobs={} pending_tail={} column_types=[{}] last_fetch=[{}]",
                     read_timeout,
                     has_lobs,
                     self.pending_row_bytes.len(),
-                    column_type_summary(&self.column_info)
+                    column_type_summary(&self.column_info),
+                    self.last_fetch_diagnostics.join("; ")
                 )));
             }
         };
@@ -119,8 +130,26 @@ impl Cursor {
         let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
 
-        for frame in &frames {
-            for obj in ClientInner::parse_ddm_objects(&frame.payload)? {
+        for (frame_index, frame) in frames.iter().enumerate() {
+            let objects = ClientInner::parse_ddm_objects(&frame.payload)?;
+            if objects.is_empty() {
+                self.last_fetch_diagnostics.push(format!(
+                    "frame#{} corr={} objects=0 payload_len={}",
+                    frame_index,
+                    frame.header.correlation_id,
+                    frame.payload.len()
+                ));
+                continue;
+            }
+            for obj in objects {
+                self.last_fetch_diagnostics.push(format!(
+                    "frame#{} corr={} cp=0x{:04X} len={} preview={}",
+                    frame_index,
+                    frame.header.correlation_id,
+                    obj.code_point,
+                    obj.data.len(),
+                    format_hex_preview(&obj.data, 96)
+                ));
                 if debug_hex_enabled() && self.fetch_calls <= 5 {
                     eprintln!(
                         "[db2-wire] CNTQRY object cp=0x{:04X} len={}",
