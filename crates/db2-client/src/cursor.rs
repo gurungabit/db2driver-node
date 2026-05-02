@@ -55,8 +55,8 @@ impl Cursor {
 
         let corr_id = inner.next_correlation_id();
         let pkgnamcsn = inner.build_pkgnamcsn_for(inner.package_id, inner.section_number);
-        let has_lobs =
-            descriptors_have_lobs(&self.descriptors) || column_info_has_lobs(&self.column_info);
+        let has_lobs = descriptors_need_lob_fetch(&self.descriptors)
+            || column_info_needs_lob_fetch(&self.column_info);
 
         let cntqry_data = if has_lobs {
             db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
@@ -253,14 +253,22 @@ fn apply_extdta_payloads_to_rows(
     }
 }
 
-fn descriptors_have_lobs(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> bool {
-    descriptors.iter().any(is_lob_descriptor)
+fn descriptors_need_lob_fetch(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> bool {
+    descriptors.iter().any(|descriptor| {
+        is_lob_descriptor(descriptor) || is_lob_like_inline_descriptor(descriptor)
+    })
 }
 
-fn column_info_has_lobs(columns: &[ColumnInfo]) -> bool {
+fn column_info_needs_lob_fetch(columns: &[ColumnInfo]) -> bool {
     columns.iter().any(|column| {
         let ty = column.type_name.to_ascii_lowercase();
-        ty.contains("clob") || ty.contains("blob")
+        let name = column.name.to_ascii_lowercase();
+        ty.contains("clob")
+            || ty.contains("blob")
+            || ty == "unknown"
+            || ty.contains("varchar(32704)")
+            || ty.contains("vargraphic(32704)")
+            || name.contains("lob")
     })
 }
 
@@ -284,6 +292,16 @@ fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
             | db2_proto::types::Db2Type::LobBytes(_)
             | db2_proto::types::Db2Type::LobChar(_)
     )
+}
+
+fn is_lob_like_inline_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    match descriptor.db2_type {
+        db2_proto::types::Db2Type::VarChar(len)
+        | db2_proto::types::Db2Type::VarGraphic(len)
+        | db2_proto::types::Db2Type::LobBytes(len)
+        | db2_proto::types::Db2Type::LobChar(len) => len >= 32_704,
+        _ => false,
+    }
 }
 
 fn value_needs_extdta(value: &db2_proto::types::Db2Value) -> bool {

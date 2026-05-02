@@ -799,6 +799,7 @@ fn looks_like_compact_descriptor_start(data: &[u8]) -> bool {
             | 492
             | 496
             | 500
+            | 904
             | 908
             | 912
             | 988
@@ -1112,6 +1113,7 @@ fn is_known_sql_type(sql_type: u16) -> bool {
             | 492
             | 496
             | 500
+            | 904
             | 908
             | 912
             | 988
@@ -1265,7 +1267,7 @@ fn drda_type_for(db2_type: &Db2Type, nullable: bool) -> u8 {
         Db2Type::DbClobLocator => DRDA_TYPE_DBCLOBLOC,
         Db2Type::LobBytes(_) => FDOCA_TYPE_LOBBYTES,
         Db2Type::LobChar(_) => FDOCA_TYPE_LOBCHAR,
-        Db2Type::RowId(_) => DRDA_TYPE_BINARY,
+        Db2Type::RowId(_) => DRDA_TYPE_ROWID,
         Db2Type::Boolean => DRDA_TYPE_BOOLEAN,
         Db2Type::Xml => DRDA_TYPE_XML,
         Db2Type::Null => DRDA_TYPE_NVARCHAR,
@@ -1395,6 +1397,17 @@ mod tests {
             parse_standard_column_descriptor(&descriptor, 0, 0, ByteOrder::BigEndian).unwrap();
         assert_eq!(next, descriptor.len());
         assert_eq!(column.name, "BASE_ID");
+    }
+
+    #[test]
+    fn test_parse_standard_rowid_descriptor() {
+        let descriptor = standard_descriptor("DB2_GENERATED_ROWID_FOR_LOBS", 0, 0, 40, 904, 1208);
+        let (column, next) =
+            parse_standard_column_descriptor(&descriptor, 0, 0, ByteOrder::BigEndian).unwrap();
+        assert_eq!(next, descriptor.len());
+        assert_eq!(column.name, "DB2_GENERATED_ROWID_FOR_LOBS");
+        assert_eq!(column.db2_type, Db2Type::RowId(40));
+        assert_eq!(column.drda_type, crate::types::DRDA_TYPE_ROWID);
     }
 
     #[test]

@@ -1086,8 +1086,9 @@ impl ClientInner {
                         pending_row_bytes.len()
                     );
                 }
+                let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
                 let mut cursor = Cursor::new(
-                    column_info.to_vec(),
+                    cursor_column_info,
                     descriptors,
                     query_instance_id,
                     self.config.fetch_size,
@@ -3482,6 +3483,19 @@ fn column_info_with_descriptor_types(
         .collect()
 }
 
+fn column_info_for_cursor_fetch(
+    column_info: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> Vec<ColumnInfo> {
+    if column_info.len() == descriptors.len() && !column_info.is_empty() {
+        column_info_with_descriptor_types(column_info, descriptors)
+    } else if column_info.is_empty() {
+        column_info_from_descriptors(descriptors)
+    } else {
+        column_info.to_vec()
+    }
+}
+
 fn debug_hex_enabled() -> bool {
     env::var_os("DB2_WIRE_DEBUG_HEX").is_some()
 }
@@ -3645,5 +3659,47 @@ mod tests {
         )];
 
         assert!(rewrite_zos_lob_select("SELECT PROP_ID FROM T", &columns).is_none());
+    }
+
+    #[test]
+    fn column_info_for_cursor_fetch_uses_qrydsc_types_when_sqldard_types_are_unknown() {
+        let columns = vec![
+            ColumnInfo::new("INSP_RPT_ID".to_string(), "Unknown".to_string(), true),
+            ColumnInfo::new("INSP_RPT_DETL_DOC".to_string(), "Unknown".to_string(), true),
+        ];
+        let descriptors = vec![
+            db2_proto::fdoca::ColumnDescriptor {
+                column_index: 0,
+                drda_type: 0x0E,
+                length: 6,
+                precision: 11,
+                scale: 0,
+                nullable: false,
+                ccsid: 0,
+                db2_type: db2_proto::types::Db2Type::Decimal {
+                    precision: 11,
+                    scale: 0,
+                },
+                byte_order: db2_proto::fdoca::ByteOrder::BigEndian,
+            },
+            db2_proto::fdoca::ColumnDescriptor {
+                column_index: 1,
+                drda_type: 0x3E,
+                length: 32_704,
+                precision: 0,
+                scale: 0,
+                nullable: false,
+                ccsid: 0,
+                db2_type: db2_proto::types::Db2Type::VarGraphic(32_704),
+                byte_order: db2_proto::fdoca::ByteOrder::BigEndian,
+            },
+        ];
+
+        let merged = column_info_for_cursor_fetch(&columns, &descriptors);
+
+        assert_eq!(merged[0].name, "INSP_RPT_ID");
+        assert_eq!(merged[0].type_name, "Decimal { precision: 11, scale: 0 }");
+        assert_eq!(merged[1].name, "INSP_RPT_DETL_DOC");
+        assert_eq!(merged[1].type_name, "VarGraphic(32704)");
     }
 }
