@@ -321,6 +321,11 @@ fn scan_standard_sqldagroups(data: &[u8]) -> Option<SqlDard> {
 /// that are not needed for names and can prevent the stricter descriptor parser
 /// from reaching SQLNAME/SQLXNAME.
 pub fn scan_column_names(data: &[u8]) -> Vec<String> {
+    let qualified_names = scan_repeated_qualified_column_names(data);
+    if !qualified_names.is_empty() {
+        return qualified_names;
+    }
+
     let mut best_names = Vec::new();
 
     for start in 0..data.len().saturating_sub(20) {
@@ -344,6 +349,33 @@ pub fn scan_column_names(data: &[u8]) -> Vec<String> {
     }
 
     best_names
+}
+
+fn scan_repeated_qualified_column_names(data: &[u8]) -> Vec<String> {
+    let candidates = scan_len_prefixed_identifier_values(data, LenPrefix::BigEndianU16);
+    let mut names = Vec::new();
+    let mut index = 0usize;
+
+    while index + 4 < candidates.len() {
+        let column = &candidates[index].text;
+        if is_probably_identifier_text(column)
+            && candidates[index + 4].text == *column
+            && candidates[index + 1].text != *column
+            && candidates[index + 2].text != *column
+            && candidates[index + 3].text != *column
+        {
+            names.push(column.clone());
+            index += 5;
+        } else {
+            index += 1;
+        }
+    }
+
+    if names.len() >= 2 {
+        names
+    } else {
+        Vec::new()
+    }
 }
 
 pub fn diagnose_column_names(data: &[u8]) -> Vec<String> {
@@ -417,6 +449,33 @@ enum LenPrefix {
 }
 
 fn scan_len_prefixed_identifier_candidates(data: &[u8], prefix: LenPrefix) -> Vec<String> {
+    scan_len_prefixed_identifier_values(data, prefix)
+        .into_iter()
+        .map(|candidate| {
+            format!(
+                "@{} len={} text={} ctx={}",
+                candidate.offset,
+                candidate.len,
+                candidate.text,
+                hex_context(
+                    data,
+                    candidate.offset,
+                    candidate.offset + candidate.prefix_len + candidate.len
+                )
+            )
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IdentifierCandidate {
+    offset: usize,
+    prefix_len: usize,
+    len: usize,
+    text: String,
+}
+
+fn scan_len_prefixed_identifier_values(data: &[u8], prefix: LenPrefix) -> Vec<IdentifierCandidate> {
     let mut candidates = Vec::new();
     let mut last_text = String::new();
     let mut last_offset = usize::MAX;
@@ -444,13 +503,12 @@ fn scan_len_prefixed_identifier_candidates(data: &[u8], prefix: LenPrefix) -> Ve
             continue;
         }
 
-        candidates.push(format!(
-            "@{} len={} text={} ctx={}",
+        candidates.push(IdentifierCandidate {
             offset,
+            prefix_len: text_start - offset,
             len,
-            text,
-            hex_context(data, offset, end)
-        ));
+            text: text.clone(),
+        });
         last_text = text;
         last_offset = offset;
     }
@@ -1327,6 +1385,26 @@ mod tests {
     }
 
     #[test]
+    fn test_scan_column_names_extracts_repeated_qualified_pattern() {
+        let mut data = Vec::new();
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "PROP_ID");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "PLCY_SNPST");
+        push_identifier(&mut data, "FIREINSP");
+        push_identifier(&mut data, "PROP_ID");
+        data.extend_from_slice(&[0xFF, 0x00, 0x00, 0x00]);
+        push_identifier(&mut data, "AGRE_ACCES_KEY");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "PLCY_SNPST");
+        push_identifier(&mut data, "FIREINSP");
+        push_identifier(&mut data, "AGRE_ACCES_KEY");
+
+        let names = scan_column_names(&data);
+        assert_eq!(names, vec!["PROP_ID", "AGRE_ACCES_KEY"]);
+    }
+
+    #[test]
     fn test_diagnose_column_names_reports_len_prefixed_candidates() {
         let mut data = vec![0; 16];
         data.extend_from_slice(&8u16.to_be_bytes());
@@ -1336,6 +1414,11 @@ mod tests {
         assert!(diagnostics
             .iter()
             .any(|line| line.contains("text=POLICYID")));
+    }
+
+    fn push_identifier(data: &mut Vec<u8>, value: &str) {
+        data.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        data.extend_from_slice(value.as_bytes());
     }
 
     fn unnamed_standard_descriptor(length: u64, sql_type: u16, ccsid: u16) -> Vec<u8> {
