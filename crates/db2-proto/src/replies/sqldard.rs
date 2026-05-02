@@ -67,24 +67,48 @@ pub fn parse_sqldard(obj: &DdmObject) -> Result<SqlDard> {
 /// control-group lengths remain network byte order, while the SQLTYPE
 /// identifiers and numeric payload fields are little-endian.
 pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
+    let mut fallback = None;
+
     if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::BigEndian) {
         if !standard.columns.is_empty() {
-            return Ok(standard);
+            if sqldard_has_real_names(&standard) {
+                return Ok(standard);
+            }
+            fallback = Some(standard);
         }
     }
 
     if let Some(compact) = parse_compact_sqldard_data(data)? {
-        return Ok(compact);
+        if sqldard_has_real_names(&compact) {
+            return Ok(compact);
+        }
+        if fallback.is_none() {
+            fallback = Some(compact);
+        }
     }
 
     if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::LittleEndian) {
         if !standard.columns.is_empty() {
-            return Ok(standard);
+            if sqldard_has_real_names(&standard) {
+                return Ok(standard);
+            }
+            if fallback.is_none() {
+                fallback = Some(standard);
+            }
         }
     }
 
     if let Some(scanned) = scan_standard_sqldagroups(data) {
-        return Ok(scanned);
+        if sqldard_has_real_names(&scanned) {
+            return Ok(scanned);
+        }
+        if fallback.is_none() {
+            fallback = Some(scanned);
+        }
+    }
+
+    if let Some(fallback) = fallback {
+        return Ok(fallback);
     }
 
     if data.is_empty() {
@@ -272,7 +296,8 @@ fn scan_standard_sqldagroups(data: &[u8]) -> Option<SqlDard> {
                 continue;
             }
 
-            let score = named_count * 1024 + columns.len();
+            let generated_count = columns.len().saturating_sub(named_count);
+            let score = named_count * 2048 + columns.len() - generated_count * 1024;
             if score > best_score {
                 best_score = score;
                 best_columns = columns;
@@ -296,6 +321,12 @@ fn is_generated_column_name(name: &str) -> bool {
         return false;
     };
     !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn sqldard_has_real_names(dard: &SqlDard) -> bool {
+    dard.columns
+        .iter()
+        .any(|column| !is_generated_column_name(&column.name))
 }
 
 fn find_compact_descriptor_table(data: &[u8]) -> Option<(usize, usize)> {
@@ -593,10 +624,14 @@ fn parse_standard_column_descriptor(
             next_offset = next;
 
             next_offset = skip_sqludtgrp(data, next_offset)?;
-            let (base_name, schema_name_candidate, next) = skip_sqldxgrp(data, next_offset)?;
+            let (base_name, schema_name_candidate, column_name_candidate, next) =
+                skip_sqldxgrp(data, next_offset)?;
             next_offset = next;
             base_table_name = base_name;
             schema_name = schema_name_candidate;
+            if name.is_none() && !column_name_candidate.is_empty() {
+                name = Some(column_name_candidate);
+            }
         }
     }
 
@@ -677,15 +712,15 @@ fn skip_sqludtgrp(data: &[u8], mut offset: usize) -> Result<usize> {
     Ok(offset)
 }
 
-fn skip_sqldxgrp(data: &[u8], mut offset: usize) -> Result<(String, String, usize)> {
+fn skip_sqldxgrp(data: &[u8], mut offset: usize) -> Result<(String, String, String, usize)> {
     if offset >= data.len() {
-        return Ok((String::new(), String::new(), offset));
+        return Ok((String::new(), String::new(), String::new(), offset));
     }
 
     let flag = data[offset];
     offset += 1;
     if flag == 0xFF {
-        return Ok((String::new(), String::new(), offset));
+        return Ok((String::new(), String::new(), String::new(), offset));
     }
 
     if offset + 8 > data.len() {
@@ -710,9 +745,9 @@ fn skip_sqldxgrp(data: &[u8], mut offset: usize) -> Result<(String, String, usiz
     offset = next;
     let (schema_s, next) = read_len_prefixed_string(data, offset)?;
     offset = next;
-    let (_xname_m, next) = read_len_prefixed_string(data, offset)?;
+    let (xname_m, next) = read_len_prefixed_string(data, offset)?;
     offset = next;
-    let (_xname_s, next) = read_len_prefixed_string(data, offset)?;
+    let (xname_s, next) = read_len_prefixed_string(data, offset)?;
     offset = next;
 
     let base_name = if !basename_m.is_empty() {
@@ -725,8 +760,13 @@ fn skip_sqldxgrp(data: &[u8], mut offset: usize) -> Result<(String, String, usiz
     } else {
         schema_s
     };
+    let column_name = if !xname_m.is_empty() {
+        xname_m
+    } else {
+        xname_s
+    };
 
-    Ok((base_name, schema_name, offset))
+    Ok((base_name, schema_name, column_name, offset))
 }
 
 fn read_u16(byte_order: ByteOrder, bytes: [u8; 2]) -> u16 {
@@ -999,6 +1039,47 @@ mod tests {
         assert_eq!(dard.columns[1].name, "POLICY_NUM");
     }
 
+    #[test]
+    fn test_parse_sqldard_prefers_scanned_names_over_generated_names() {
+        let mut data = Vec::new();
+        data.push(0x00);
+        data.extend_from_slice(&0i32.to_be_bytes());
+        data.extend_from_slice(b"00000");
+        data.extend_from_slice(b"SQLPROC1");
+        data.push(0xFF);
+        data.push(0xFF);
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&unnamed_standard_descriptor(4, 496, 0));
+
+        data.extend_from_slice(&standard_descriptor("POLICY_ID", 0, 0, 6, 484, 0));
+        data.extend_from_slice(&standard_descriptor("POLICY_NUM", 0, 0, 20, 464, 1200));
+
+        let dard = parse_sqldard_data(&data).unwrap();
+        assert_eq!(dard.num_columns, 2);
+        assert_eq!(dard.columns[0].name, "POLICY_ID");
+        assert_eq!(dard.columns[1].name, "POLICY_NUM");
+    }
+
+    #[test]
+    fn test_parse_standard_column_descriptor_uses_sqlxname() {
+        let descriptor = standard_descriptor_with_sqlxname("BASE_ID", 0, 0, 4, 496, 0);
+        let (column, next) =
+            parse_standard_column_descriptor(&descriptor, 0, 0, ByteOrder::BigEndian).unwrap();
+        assert_eq!(next, descriptor.len());
+        assert_eq!(column.name, "BASE_ID");
+    }
+
+    fn unnamed_standard_descriptor(length: u64, sql_type: u16, ccsid: u16) -> Vec<u8> {
+        let mut descriptor = Vec::new();
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&length.to_be_bytes());
+        descriptor.extend_from_slice(&sql_type.to_be_bytes());
+        descriptor.extend_from_slice(&ccsid.to_be_bytes());
+        descriptor.push(0xFF);
+        descriptor
+    }
+
     fn standard_descriptor(
         name: &str,
         precision: u16,
@@ -1022,6 +1103,40 @@ mod tests {
         }
         descriptor.push(0xFF);
         descriptor.push(0xFF);
+        descriptor
+    }
+
+    fn standard_descriptor_with_sqlxname(
+        name: &str,
+        precision: u16,
+        scale: u16,
+        length: u64,
+        sql_type: u16,
+        ccsid: u16,
+    ) -> Vec<u8> {
+        let mut descriptor = Vec::new();
+        descriptor.extend_from_slice(&precision.to_be_bytes());
+        descriptor.extend_from_slice(&scale.to_be_bytes());
+        descriptor.extend_from_slice(&length.to_be_bytes());
+        descriptor.extend_from_slice(&sql_type.to_be_bytes());
+        descriptor.extend_from_slice(&ccsid.to_be_bytes());
+        descriptor.push(0x00);
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        for _ in 0..6 {
+            descriptor.extend_from_slice(&0u16.to_be_bytes());
+        }
+        descriptor.push(0xFF);
+        descriptor.push(0x00);
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        for _ in 0..7 {
+            descriptor.extend_from_slice(&0u16.to_be_bytes());
+        }
+        descriptor.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        descriptor.extend_from_slice(name.as_bytes());
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
         descriptor
     }
 }
