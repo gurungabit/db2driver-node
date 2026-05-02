@@ -964,9 +964,9 @@ impl ClientInner {
 
         // If not end of query, continue fetching explicitly.
         if !end_of_query {
-            let cursor_descriptors = sqldard_descriptors
+            let cursor_descriptors = qrydsc_descriptors
                 .clone()
-                .or(qrydsc_descriptors.clone())
+                .or(sqldard_descriptors.clone())
                 .filter(|descriptors| !descriptors.is_empty());
             if let Some(descriptors) = cursor_descriptors {
                 if debug_hex_enabled() {
@@ -2344,7 +2344,7 @@ fn process_query_frames(
                 codepoints::QRYDTA => {
                     trace!("Received QRYDTA");
                     let active_descriptors =
-                        sqldard_descriptors.as_ref().or(qrydsc_descriptors.as_ref());
+                        qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
                     if let Some(descs) = active_descriptors {
                         if descs.is_empty() {
                             continue;
@@ -2455,7 +2455,7 @@ fn decode_pending_query_data(
         return Ok(());
     }
 
-    let Some(descs) = sqldard_descriptors.as_ref().or(qrydsc_descriptors.as_ref()) else {
+    let Some(descs) = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref()) else {
         return Ok(());
     };
     if descs.is_empty() {
