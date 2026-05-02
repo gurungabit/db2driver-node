@@ -1008,6 +1008,8 @@ impl ClientInner {
         let columns = if !column_info.is_empty() {
             if let Some(descriptors) = active_descriptors.filter(|d| d.len() == column_info.len()) {
                 column_info_with_descriptor_types(column_info, descriptors)
+            } else if let Some(descriptors) = active_descriptors {
+                column_info_from_descriptors(descriptors)
             } else {
                 column_info.to_vec()
             }
@@ -1700,6 +1702,19 @@ fn parse_sqldard_columns(obj: &DdmObject) -> Vec<ColumnInfo> {
             .into_iter()
             .zip(scanned_names)
             .map(|(col, name)| column_info_from_sqldard_metadata(col, Some(name)))
+            .collect();
+    }
+
+    if dard.columns.is_empty() && scanned_names.len() >= 2 {
+        return scanned_names
+            .into_iter()
+            .map(|name| ColumnInfo {
+                name,
+                type_name: "Unknown".to_string(),
+                nullable: true,
+                precision: None,
+                scale: None,
+            })
             .collect();
     }
 
