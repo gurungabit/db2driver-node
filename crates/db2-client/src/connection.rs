@@ -919,6 +919,44 @@ impl ClientInner {
             )?;
         }
 
+        if !end_of_query && sqldard_descriptors.is_none() && qrydsc_descriptors.is_none() {
+            for _ in 0..3 {
+                let pkgnamcsn = self.build_pkgnamcsn_for(self.package_id, self.section_number);
+                let cntqry_data = db2_proto::commands::cntqry::build_cntqry(
+                    &pkgnamcsn,
+                    query_instance_id.as_deref(),
+                    db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                    None,
+                    None,
+                );
+                let corr_id = self.next_correlation_id();
+                let mut writer = DssWriter::new(corr_id);
+                writer.write_request(&cntqry_data, false);
+                let send_buf = writer.finish();
+                self.send_bytes(&send_buf).await?;
+
+                let more_frames = self.read_reply_frames().await?;
+                process_query_frames(
+                    &more_frames,
+                    column_info,
+                    &mut rows,
+                    &mut sqldard_descriptors,
+                    &mut qrydsc_descriptors,
+                    &mut query_instance_id,
+                    &mut pending_row_bytes,
+                    &mut end_of_query,
+                )?;
+
+                if end_of_query
+                    || sqldard_descriptors.is_some()
+                    || qrydsc_descriptors.is_some()
+                    || !rows.is_empty()
+                {
+                    break;
+                }
+            }
+        }
+
         // If not end of query, continue fetching explicitly.
         if !end_of_query {
             let cursor_descriptors = sqldard_descriptors
@@ -939,7 +977,7 @@ impl ClientInner {
                     query_instance_id,
                     self.config.fetch_size,
                 );
-                cursor.pending_row_bytes = pending_row_bytes;
+                cursor.pending_row_bytes = std::mem::take(&mut pending_row_bytes);
 
                 loop {
                     let (more_rows, done) = cursor.fetch_next_from(self).await?;
@@ -963,12 +1001,13 @@ impl ClientInner {
 
         if debug_hex_enabled() {
             eprintln!(
-                "[db2-wire] process_query_reply final columns={} rows={} initial_columns={} qrydsc_desc={} sqldard_desc={}",
+                "[db2-wire] process_query_reply final columns={} rows={} initial_columns={} qrydsc_desc={} sqldard_desc={} pending={}",
                 columns.len(),
                 rows.len(),
                 column_info.len(),
                 qrydsc_descriptors.as_ref().map(|v| v.len()).unwrap_or(0),
-                sqldard_descriptors.as_ref().map(|v| v.len()).unwrap_or(0)
+                sqldard_descriptors.as_ref().map(|v| v.len()).unwrap_or(0),
+                pending_row_bytes.len()
             );
         }
 
@@ -2278,6 +2317,13 @@ fn process_query_frames(
                                 );
                             }
                             *qrydsc_descriptors = Some(descriptors);
+                            decode_pending_query_data(
+                                column_info,
+                                rows,
+                                sqldard_descriptors,
+                                qrydsc_descriptors,
+                                pending_row_bytes,
+                            )?;
                         } else if debug_hex_enabled() {
                             eprintln!("[db2-wire] parsed 0 QRYDSC descriptor(s)");
                         }
@@ -2320,6 +2366,14 @@ fn process_query_frames(
                             let col_names = row_column_names(column_info, values.len());
                             rows.push(Row::new(col_names, values));
                         }
+                    } else {
+                        if debug_hex_enabled() {
+                            eprintln!(
+                                "[db2-wire] buffering QRYDTA len={} until descriptors arrive",
+                                obj.data.len()
+                            );
+                        }
+                        pending_row_bytes.extend_from_slice(&obj.data);
                     }
                 }
                 codepoints::ENDQRYRM => {
@@ -2343,6 +2397,13 @@ fn process_query_frames(
                             );
                         }
                         *sqldard_descriptors = Some(descriptors);
+                        decode_pending_query_data(
+                            column_info,
+                            rows,
+                            sqldard_descriptors,
+                            qrydsc_descriptors,
+                            pending_row_bytes,
+                        )?;
                     } else if debug_hex_enabled() {
                         eprintln!("[db2-wire] parsed 0 SQLDARD descriptor(s) in query reply");
                     }
@@ -2369,6 +2430,36 @@ fn process_query_frames(
             }
         }
     }
+
+    Ok(())
+}
+
+fn decode_pending_query_data(
+    column_info: &[ColumnInfo],
+    rows: &mut Vec<Row>,
+    sqldard_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    qrydsc_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    pending_row_bytes: &mut Vec<u8>,
+) -> Result<(), Error> {
+    if pending_row_bytes.is_empty() {
+        return Ok(());
+    }
+
+    let Some(descs) = sqldard_descriptors.as_ref().or(qrydsc_descriptors.as_ref()) else {
+        return Ok(());
+    };
+    if descs.is_empty() {
+        return Ok(());
+    }
+
+    let mut buffered = std::mem::take(pending_row_bytes);
+    let decoded_rows = db2_proto::fdoca::decode_rows_with_tail(&[], descs, &mut buffered)
+        .map_err(|e| Error::Protocol(e.to_string()))?;
+    for values in decoded_rows {
+        let col_names = row_column_names(column_info, values.len());
+        rows.push(Row::new(col_names, values));
+    }
+    *pending_row_bytes = buffered;
 
     Ok(())
 }
