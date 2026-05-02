@@ -322,6 +322,10 @@ fn scan_standard_sqldagroups(data: &[u8]) -> Option<SqlDard> {
 /// from reaching SQLNAME/SQLXNAME.
 pub fn scan_column_names(data: &[u8]) -> Vec<String> {
     let qualified_names = scan_repeated_qualified_column_names(data);
+    let names_before_rdb = scan_names_immediately_before_rdb(data);
+    if names_before_rdb.len() > qualified_names.len() {
+        return names_before_rdb;
+    }
     if !qualified_names.is_empty() {
         return qualified_names;
     }
@@ -349,6 +353,31 @@ pub fn scan_column_names(data: &[u8]) -> Vec<String> {
     }
 
     best_names
+}
+
+fn scan_names_immediately_before_rdb(data: &[u8]) -> Vec<String> {
+    let candidates = scan_len_prefixed_identifier_values(data, LenPrefix::BigEndianU16);
+    let Some(rdb_name) = candidates.first().map(|candidate| candidate.text.as_str()) else {
+        return Vec::new();
+    };
+    if !is_probably_identifier_text(rdb_name) {
+        return Vec::new();
+    }
+
+    let mut names = Vec::new();
+    for pair in candidates.windows(2) {
+        let column = &pair[0].text;
+        if pair[1].text == rdb_name && column != rdb_name && is_probably_identifier_text(column) {
+            names.push(column.clone());
+        }
+    }
+
+    names.dedup();
+    if names.len() >= 2 {
+        names
+    } else {
+        Vec::new()
+    }
 }
 
 fn scan_repeated_qualified_column_names(data: &[u8]) -> Vec<String> {
@@ -1405,6 +1434,37 @@ mod tests {
 
         let names = scan_column_names(&data);
         assert_eq!(names, vec!["PROP_ID", "AGRE_ACCES_KEY"]);
+    }
+
+    #[test]
+    fn test_scan_column_names_extracts_lob_descriptors_before_rdb_name() {
+        let mut data = Vec::new();
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "INSP_RPT_ID");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "INSP_RPT");
+        push_identifier(&mut data, "FIREINSP");
+        push_identifier(&mut data, "INSP_RPT_ID");
+        push_identifier(&mut data, "INSP_RPT_DETL_DOC");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "UNDWR_ACTN_DETL_DOC");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "DB2_GENERATED_ROWID_FOR_LOBS");
+        push_identifier(&mut data, "DDFIC0AG");
+        push_identifier(&mut data, "INSP_RPT");
+        push_identifier(&mut data, "FIREINSP");
+        push_identifier(&mut data, "DB2_GENERATED_ROWID_FOR_LOBS");
+
+        let names = scan_column_names(&data);
+        assert_eq!(
+            names,
+            vec![
+                "INSP_RPT_ID",
+                "INSP_RPT_DETL_DOC",
+                "UNDWR_ACTN_DETL_DOC",
+                "DB2_GENERATED_ROWID_FOR_LOBS"
+            ]
+        );
     }
 
     #[test]

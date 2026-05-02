@@ -1711,6 +1711,7 @@ fn rewrite_zos_select_star_lobs(
                         "CAST(SUBSTR({ident}, 1, {ZOS_DBCLOB_INLINE_LIMIT}) AS VARGRAPHIC({ZOS_DBCLOB_INLINE_LIMIT})) AS {ident}"
                     )
                 }
+                "ROWID" => format!("HEX({ident}) AS {ident}"),
                 _ => ident,
             }
         })
@@ -3139,14 +3140,7 @@ fn row_column_names(column_info: &[ColumnInfo], value_count: usize) -> Vec<Strin
         return column_info.iter().map(|c| c.name.clone()).collect();
     }
 
-    (0..value_count)
-        .map(|i| {
-            column_info
-                .get(i)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| format!("COL{}", i + 1))
-        })
-        .collect()
+    (0..value_count).map(|i| format!("COL{}", i + 1)).collect()
 }
 
 fn column_info_from_descriptors(
@@ -3306,7 +3300,8 @@ mod tests {
         assert!(rewritten.contains(
             "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 32704) AS VARCHAR(32704)) AS \"INSP_RPT_DETL_DOC\""
         ));
-        assert!(rewritten.contains("\"DB2_GENERATED_ROWID_FOR_LOBS\""));
+        assert!(rewritten
+            .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
     }
 

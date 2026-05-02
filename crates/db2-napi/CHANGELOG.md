@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.53](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.53) (2026-05-02)
+
+### Bug Fixes
+
+- preserve z/OS rewritten CLOB column names and decode ROWID as hex text
+
 ## [0.1.7-zos.52](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.52) (2026-05-02)
 
 ### Bug Fixes
