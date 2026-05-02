@@ -29,18 +29,29 @@ pub fn build_sqlstt(sql: &str) -> Vec<u8> {
     ddm.build()
 }
 
-/// Build an SQLSTT object using the z/OS/JCC SQL statement group shape.
+/// Build an SQLAM 7+ nullable single-byte character payload.
 ///
-/// IBM z/OS traces show SQLSTT data as:
-///   - 2-byte big-endian SQL statement length
-///   - SQL text in the negotiated source CCSID
-///   - 0x0000 terminator
+/// SQLSTT and SQLATTR use the same encoded-string group. For our current
+/// z/OS path we send the mixed-byte value as null and the single-byte value
+/// as the SQL text:
+///   - 0xFF: nullable mixed string is null
+///   - 0x00: nullable single-byte string is present
+///   - 4-byte big-endian length
+///   - text in the negotiated source CCSID
+pub(crate) fn build_zos_nocs_payload(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut payload = Vec::with_capacity(6 + bytes.len());
+    payload.push(0xFF);
+    payload.push(0x00);
+    payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    payload.extend_from_slice(bytes);
+    payload
+}
+
+/// Build an SQLSTT object using the z/OS/JCC SQL statement group shape.
 pub fn build_sqlstt_zos(sql: &str) -> Vec<u8> {
-    let sql_bytes = sql.as_bytes();
     let mut ddm = DdmBuilder::new(SQLSTT);
-    ddm.add_raw(&(sql_bytes.len() as u16).to_be_bytes());
-    ddm.add_raw(sql_bytes);
-    ddm.add_raw(&[0x00, 0x00]);
+    ddm.add_raw(&build_zos_nocs_payload(sql));
     ddm.build()
 }
 
@@ -74,10 +85,10 @@ mod tests {
         let (obj, _) = DdmObject::parse(&bytes).unwrap();
         assert_eq!(obj.code_point, SQLSTT);
         assert_eq!(
-            u16::from_be_bytes([obj.data[0], obj.data[1]]) as usize,
+            u32::from_be_bytes([obj.data[2], obj.data[3], obj.data[4], obj.data[5]]) as usize,
             sql.len()
         );
-        assert_eq!(&obj.data[2..2 + sql.len()], sql.as_bytes());
-        assert_eq!(&obj.data[2 + sql.len()..], &[0x00, 0x00]);
+        assert_eq!(&obj.data[..2], &[0xFF, 0x00]);
+        assert_eq!(&obj.data[6..6 + sql.len()], sql.as_bytes());
     }
 }
