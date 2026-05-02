@@ -524,6 +524,23 @@ impl ClientInner {
         let mut input_descriptors = Vec::new();
 
         if is_query {
+            if params.is_empty() && use_zos_sqlstt {
+                let current_schema = self.config.current_schema.clone();
+                if let Some(metadata_sql) =
+                    build_zos_select_star_metadata_query(sql, current_schema.as_deref())
+                {
+                    if let Ok(metadata) = Box::pin(self.execute_query(&metadata_sql, params)).await
+                    {
+                        if let Some(rewritten_sql) =
+                            rewrite_zos_select_star_lobs(sql, current_schema.as_deref(), &metadata)
+                        {
+                            ensure_sqlstt_sql_len(&rewritten_sql)?;
+                            return Box::pin(self.execute_query(&rewritten_sql, params)).await;
+                        }
+                    }
+                }
+            }
+
             // Prepare first, then open the query explicitly. This is a little
             // more chatty than chaining OPNQRY onto the prepare request, but it
             // is much more reliable for large multi-segment SQLSTT payloads.
@@ -532,6 +549,35 @@ impl ClientInner {
                 db2_proto::commands::prpsqlstt::build_prpsqlstt_with_sqlda(&pkgnamcsn);
             let sqlstt_data = build_sqlstt_for_server(sql, use_zos_sqlstt);
             let qryblksz: u32 = 0x0000FFFF;
+
+            if params.is_empty() && use_zos_sqlstt {
+                let opnqry_data = {
+                    let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
+                    ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
+                    ddm.add_u32(
+                        codepoints::QRYBLKSZ,
+                        db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                    );
+                    ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
+                    ddm.build()
+                };
+
+                let mut writer = DssWriter::new(corr_id);
+                writer.write_request_next_same_corr(&prpsqlstt_data, true);
+                writer.write_object(&sqlstt_data, true);
+                writer.set_correlation_id(self.next_correlation_id());
+                writer.write_request(&opnqry_data, false);
+
+                let send_buf = writer.finish();
+                self.send_bytes(&send_buf).await?;
+
+                let frames = self.read_execute_reply_frames().await?;
+                let column_info = self.parse_prepare_reply(&frames)?;
+                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+                return self
+                    .process_query_reply(&frames, &column_info, Some(&result_descriptors))
+                    .await;
+            }
 
             let mut writer = DssWriter::new(corr_id);
             writer.write_request_next_same_corr(&prpsqlstt_data, true);
@@ -1588,6 +1634,20 @@ const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SimpleSelectStar {
+    table_ref: String,
+    suffix: String,
+    schema: String,
+    table: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CatalogColumn {
+    name: String,
+    coltype: String,
+}
+
 pub(crate) fn ensure_sqlstt_sql_len(sql: &str) -> Result<(), Error> {
     let sql_len = sql.len();
     if sql_len > SQLSTT_SQL_TEXT_LEN_LIMIT {
@@ -1611,6 +1671,227 @@ pub(crate) fn build_sqlstt_for_server(sql: &str, use_zos_format: bool) -> Vec<u8
     } else {
         db2_proto::commands::sqlstt::build_sqlstt(sql)
     }
+}
+
+fn build_zos_select_star_metadata_query(sql: &str, current_schema: Option<&str>) -> Option<String> {
+    let parsed = parse_simple_select_star(sql, current_schema)?;
+    Some(format!(
+        "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = '{}' AND TBNAME = '{}' ORDER BY COLNO",
+        escape_sql_string_literal(&parsed.schema.to_ascii_uppercase()),
+        escape_sql_string_literal(&parsed.table.to_ascii_uppercase())
+    ))
+}
+
+fn rewrite_zos_select_star_lobs(
+    sql: &str,
+    current_schema: Option<&str>,
+    metadata: &QueryResult,
+) -> Option<String> {
+    let parsed = parse_simple_select_star(sql, current_schema)?;
+    let columns = catalog_columns_from_query_result(metadata);
+    if columns.is_empty() {
+        return None;
+    }
+
+    let mut has_lob = false;
+    let projection = columns
+        .iter()
+        .map(|column| {
+            let ident = quote_sql_identifier(&column.name);
+            match column.coltype.trim().to_ascii_uppercase().as_str() {
+                "CLOB" => {
+                    has_lob = true;
+                    format!(
+                        "CAST(SUBSTR({ident}, 1, {ZOS_CLOB_INLINE_LIMIT}) AS VARCHAR({ZOS_CLOB_INLINE_LIMIT})) AS {ident}"
+                    )
+                }
+                "DBCLOB" => {
+                    has_lob = true;
+                    format!(
+                        "CAST(SUBSTR({ident}, 1, {ZOS_DBCLOB_INLINE_LIMIT}) AS VARGRAPHIC({ZOS_DBCLOB_INLINE_LIMIT})) AS {ident}"
+                    )
+                }
+                _ => ident,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if !has_lob {
+        return None;
+    }
+
+    let suffix = parsed.suffix.trim();
+    if suffix.is_empty() {
+        Some(format!(
+            "SELECT {} FROM {}",
+            projection.join(", "),
+            parsed.table_ref
+        ))
+    } else {
+        Some(format!(
+            "SELECT {} FROM {} {}",
+            projection.join(", "),
+            parsed.table_ref,
+            suffix
+        ))
+    }
+}
+
+fn catalog_columns_from_query_result(metadata: &QueryResult) -> Vec<CatalogColumn> {
+    metadata
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let name = row.get::<String>("NAME")?.trim().to_string();
+            let coltype = row.get::<String>("COLTYPE")?.trim().to_string();
+            (!name.is_empty()).then_some(CatalogColumn { name, coltype })
+        })
+        .collect()
+}
+
+fn parse_simple_select_star(sql: &str, current_schema: Option<&str>) -> Option<SimpleSelectStar> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let mut offset = skip_ascii_whitespace(trimmed, 0);
+    offset = consume_keyword(trimmed, offset, "SELECT")?;
+    offset = skip_ascii_whitespace(trimmed, offset);
+    if trimmed.as_bytes().get(offset).copied()? != b'*' {
+        return None;
+    }
+    offset += 1;
+    offset = skip_ascii_whitespace(trimmed, offset);
+    offset = consume_keyword(trimmed, offset, "FROM")?;
+    offset = skip_ascii_whitespace(trimmed, offset);
+
+    let table_start = offset;
+    offset = consume_table_ref(trimmed, offset)?;
+    let table_ref = trimmed[table_start..offset].trim();
+    if table_ref.is_empty() || table_ref.starts_with('(') {
+        return None;
+    }
+
+    let suffix = trimmed[offset..].trim().to_string();
+    let parts = split_table_ref_parts(table_ref)?;
+    let (schema, table) = match parts.as_slice() {
+        [table] => (current_schema?.trim().to_string(), table.clone()),
+        [schema, table] => (schema.clone(), table.clone()),
+        _ => return None,
+    };
+
+    if schema.is_empty() || table.is_empty() {
+        return None;
+    }
+
+    Some(SimpleSelectStar {
+        table_ref: table_ref.to_string(),
+        suffix,
+        schema,
+        table,
+    })
+}
+
+fn skip_ascii_whitespace(input: &str, mut offset: usize) -> usize {
+    while input
+        .as_bytes()
+        .get(offset)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        offset += 1;
+    }
+    offset
+}
+
+fn consume_keyword(input: &str, offset: usize, keyword: &str) -> Option<usize> {
+    let end = offset.checked_add(keyword.len())?;
+    let candidate = input.get(offset..end)?;
+    if !candidate.eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    if input
+        .as_bytes()
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        return None;
+    }
+    Some(end)
+}
+
+fn consume_table_ref(input: &str, mut offset: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut saw_char = false;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'"' => {
+                saw_char = true;
+                offset += 1;
+                while offset < bytes.len() {
+                    if bytes[offset] == b'"' {
+                        offset += 1;
+                        if bytes.get(offset) == Some(&b'"') {
+                            offset += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    offset += 1;
+                }
+            }
+            byte if byte.is_ascii_whitespace() => break,
+            b';' => break,
+            _ => {
+                saw_char = true;
+                offset += 1;
+            }
+        }
+    }
+    saw_char.then_some(offset)
+}
+
+fn split_table_ref_parts(table_ref: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let bytes = table_ref.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'"' => {
+                offset += 1;
+                while offset < bytes.len() {
+                    if bytes[offset] == b'"' {
+                        offset += 1;
+                        if bytes.get(offset) == Some(&b'"') {
+                            current.push('"');
+                            offset += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    current.push(bytes[offset] as char);
+                    offset += 1;
+                }
+            }
+            b'.' => {
+                parts.push(current.trim().to_string());
+                current.clear();
+                offset += 1;
+            }
+            byte => {
+                current.push(byte as char);
+                offset += 1;
+            }
+        }
+    }
+    parts.push(current.trim().to_string());
+
+    if parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+
+    Some(parts)
+}
+
+fn escape_sql_string_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 fn rewrite_zos_lob_select(sql: &str, columns: &[ColumnInfo]) -> Option<String> {
@@ -2952,6 +3233,82 @@ pub(crate) fn sql_is_query(sql: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db2_proto::types::Db2Value;
+
+    #[test]
+    fn build_zos_select_star_metadata_query_uses_zos_catalog() {
+        let query = build_zos_select_star_metadata_query(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = 'FIREINSP' AND TBNAME = 'INSP_RPT' ORDER BY COLNO"
+        );
+    }
+
+    #[test]
+    fn parse_simple_select_star_supports_current_schema_and_quoted_names() {
+        let parsed = parse_simple_select_star(
+            " select * from \"FireInsp\".\"INSP_RPT\" fetch first 1 row only ",
+            Some("IGNORED"),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.schema, "FireInsp");
+        assert_eq!(parsed.table, "INSP_RPT");
+        assert_eq!(parsed.suffix, "fetch first 1 row only");
+
+        let parsed = parse_simple_select_star("SELECT * FROM INSP_RPT", Some("FIREINSP")).unwrap();
+        assert_eq!(parsed.schema, "FIREINSP");
+        assert_eq!(parsed.table, "INSP_RPT");
+    }
+
+    #[test]
+    fn rewrite_zos_select_star_lobs_uses_catalog_metadata() {
+        let metadata = QueryResult::with_rows(
+            vec![
+                Row::new(
+                    vec!["NAME".to_string(), "COLTYPE".to_string()],
+                    vec![
+                        Db2Value::VarChar("INSP_RPT_ID".to_string()),
+                        Db2Value::Char("DECIMAL ".to_string()),
+                    ],
+                ),
+                Row::new(
+                    vec!["NAME".to_string(), "COLTYPE".to_string()],
+                    vec![
+                        Db2Value::VarChar("INSP_RPT_DETL_DOC".to_string()),
+                        Db2Value::Char("CLOB    ".to_string()),
+                    ],
+                ),
+                Row::new(
+                    vec!["NAME".to_string(), "COLTYPE".to_string()],
+                    vec![
+                        Db2Value::VarChar("DB2_GENERATED_ROWID_FOR_LOBS".to_string()),
+                        Db2Value::Char("ROWID   ".to_string()),
+                    ],
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let rewritten = rewrite_zos_select_star_lobs(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY",
+            None,
+            &metadata,
+        )
+        .unwrap();
+
+        assert!(rewritten.contains("\"INSP_RPT_ID\""));
+        assert!(rewritten.contains(
+            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 32704) AS VARCHAR(32704)) AS \"INSP_RPT_DETL_DOC\""
+        ));
+        assert!(rewritten.contains("\"DB2_GENERATED_ROWID_FOR_LOBS\""));
+        assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
+    }
 
     #[test]
     fn rewrite_zos_lob_select_materializes_clob_columns() {
