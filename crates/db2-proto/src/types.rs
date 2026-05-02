@@ -45,6 +45,16 @@ pub const DRDA_TYPE_CLOB: u8 = 0xCA;
 pub const DRDA_TYPE_NCLOB: u8 = 0xCB;
 pub const DRDA_TYPE_DBCLOB: u8 = 0xCC;
 pub const DRDA_TYPE_NDBCLOB: u8 = 0xCD;
+pub const DRDA_TYPE_LOBLOC: u8 = 0x18;
+pub const DRDA_TYPE_NLOBLOC: u8 = 0x19;
+pub const DRDA_TYPE_CLOBLOC: u8 = 0x1A;
+pub const DRDA_TYPE_NCLOBLOC: u8 = 0x1B;
+pub const DRDA_TYPE_DBCLOBLOC: u8 = 0x1C;
+pub const DRDA_TYPE_NDBCLOBLOC: u8 = 0x1D;
+pub const DRDA_TYPE_ROWID: u8 = 0x1E;
+pub const DRDA_TYPE_NROWID: u8 = 0x1F;
+pub const FDOCA_TYPE_LOBBYTES: u8 = 0x50;
+pub const FDOCA_TYPE_LOBCHAR: u8 = 0x51;
 
 // Date/Time
 pub const DRDA_TYPE_DATE: u8 = 0x20;
@@ -89,12 +99,17 @@ pub enum Db2Type {
     Binary(u16),
     VarBinary(u16),
     Blob,
+    BlobLocator,
     Date,
     Time,
     Timestamp,
     Graphic(u16),
     VarGraphic(u16),
     DbClob,
+    ClobLocator,
+    DbClobLocator,
+    LobBytes(u16),
+    LobChar(u16),
     RowId(u16),
     Boolean,
     Xml,
@@ -105,6 +120,15 @@ impl Db2Type {
     /// Decode a Db2Type from a DRDA type code and length.
     /// The `nullable` return value indicates if this is a nullable variant.
     pub fn from_drda_type(type_code: u8, length: u16, precision: u8, scale: u8) -> (Self, bool) {
+        // 0x50/0x51 are used as FD:OCA override LIDs for materialized LOB
+        // bytes/chars. They are not ordinary nullable DRDA scalar IDs in QRYDSC.
+        if type_code == FDOCA_TYPE_LOBBYTES {
+            return (Db2Type::LobBytes(length), false);
+        }
+        if type_code == FDOCA_TYPE_LOBCHAR {
+            return (Db2Type::LobChar(length), false);
+        }
+
         let nullable = (type_code & 0x01) != 0;
         let base = type_code & 0xFE; // strip nullable bit
         let ty = match base {
@@ -114,6 +138,10 @@ impl Db2Type {
             0x0C => Db2Type::Decimal { precision, scale },
             0x0E => Db2Type::Double,
             0x16 => Db2Type::BigInt,
+            0x18 => Db2Type::BlobLocator,
+            0x1A => Db2Type::ClobLocator,
+            0x1C => Db2Type::DbClobLocator,
+            0x1E => Db2Type::RowId(length),
             0xBA => Db2Type::DecFloat(if length > 8 { 34 } else { 16 }),
             0x20 => Db2Type::Date,
             0x22 => Db2Type::Time,
@@ -154,8 +182,10 @@ impl Db2Type {
             Db2Type::Time => Some(8),
             Db2Type::Timestamp => Some(26),
             Db2Type::Boolean => Some(1),
+            Db2Type::BlobLocator | Db2Type::ClobLocator | Db2Type::DbClobLocator => Some(4),
             Db2Type::Binary(len) => Some(*len as usize),
             Db2Type::Graphic(len) => Some(*len as usize * 2),
+            Db2Type::LobBytes(len) | Db2Type::LobChar(len) => Some((*len & 0x7FFF) as usize),
             Db2Type::RowId(len) => Some(*len as usize),
             _ => None, // variable-length
         }

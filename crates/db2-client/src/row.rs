@@ -64,6 +64,10 @@ impl Row {
         &self.values
     }
 
+    pub(crate) fn values_mut(&mut self) -> &mut [db2_proto::types::Db2Value] {
+        &mut self.values
+    }
+
     /// Return the number of columns.
     pub fn len(&self) -> usize {
         self.columns.len()

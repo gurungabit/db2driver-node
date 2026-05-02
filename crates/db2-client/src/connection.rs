@@ -524,26 +524,6 @@ impl ClientInner {
         let mut input_descriptors = Vec::new();
 
         if is_query {
-            if params.is_empty() && use_zos_sqlstt {
-                let current_schema = self.config.current_schema.clone();
-                if let Some(metadata_sql) =
-                    build_zos_select_star_metadata_query(sql, current_schema.as_deref())
-                {
-                    if let Ok(metadata) = Box::pin(self.execute_query(&metadata_sql, params)).await
-                    {
-                        if let Some(result) = Box::pin(self.execute_zos_select_star_lobs_chunked(
-                            sql,
-                            current_schema.as_deref(),
-                            &metadata,
-                        ))
-                        .await?
-                        {
-                            return Ok(result);
-                        }
-                    }
-                }
-            }
-
             // Prepare first, then open the query explicitly. This is a little
             // more chatty than chaining OPNQRY onto the prepare request, but it
             // is much more reliable for large multi-segment SQLSTT payloads.
@@ -597,12 +577,6 @@ impl ClientInner {
             let frames = self.read_prepare_reply_frames().await?;
             let column_info = self.parse_prepare_reply(&frames)?;
             let result_descriptors = self.parse_prepare_result_descriptors(&frames);
-            if use_zos_sqlstt {
-                if let Some(rewritten_sql) = rewrite_zos_lob_select(sql, &column_info) {
-                    ensure_sqlstt_sql_len(&rewritten_sql)?;
-                    return Box::pin(self.execute_query(&rewritten_sql, params)).await;
-                }
-            }
 
             if params.is_empty() {
                 let corr_id = self.next_correlation_id();
@@ -990,6 +964,7 @@ impl ClientInner {
         let mut qrydsc_descriptors: Option<Vec<db2_proto::fdoca::ColumnDescriptor>> = None;
         let mut query_instance_id: Option<Vec<u8>> = None;
         let mut pending_row_bytes = Vec::new();
+        let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
         let mut diagnostics = frame_diagnostics(frames);
         if let Some(descriptors) = sqldard_descriptors.as_ref() {
@@ -1008,6 +983,7 @@ impl ClientInner {
             &mut qrydsc_descriptors,
             &mut query_instance_id,
             &mut pending_row_bytes,
+            &mut extdta_payloads,
             &mut end_of_query,
             &mut diagnostics,
         )?;
@@ -1049,6 +1025,7 @@ impl ClientInner {
                 &mut qrydsc_descriptors,
                 &mut query_instance_id,
                 &mut pending_row_bytes,
+                &mut extdta_payloads,
                 &mut end_of_query,
                 &mut diagnostics,
             )?;
@@ -1080,6 +1057,7 @@ impl ClientInner {
                     &mut qrydsc_descriptors,
                     &mut query_instance_id,
                     &mut pending_row_bytes,
+                    &mut extdta_payloads,
                     &mut end_of_query,
                     &mut diagnostics,
                 )?;
@@ -1148,6 +1126,9 @@ impl ClientInner {
         }
 
         let active_descriptors = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
+        if let Some(descriptors) = active_descriptors {
+            apply_extdta_payloads_to_rows(&mut rows, descriptors, &extdta_payloads);
+        }
         let columns = if !column_info.is_empty() {
             if let Some(descriptors) = active_descriptors.filter(|d| d.len() == column_info.len()) {
                 column_info_with_descriptor_types(column_info, descriptors)
@@ -2635,17 +2616,25 @@ fn encode_parameter_value(
             db2_proto::types::encode_decfloat(&decimal, *digits).map_err(Error::from)?
         }
         Db2Type::Char(len) => encode_fixed_string(value, *len as usize, descriptor.ccsid)?,
-        Db2Type::VarChar(_) | Db2Type::LongVarChar | Db2Type::Clob | Db2Type::Xml => {
-            encode_ld_string(value, descriptor.ccsid)?
-        }
+        Db2Type::VarChar(_)
+        | Db2Type::LongVarChar
+        | Db2Type::Clob
+        | Db2Type::LobChar(_)
+        | Db2Type::Xml => encode_ld_string(value, descriptor.ccsid)?,
         Db2Type::Binary(len) => encode_fixed_binary(value, *len as usize)?,
-        Db2Type::VarBinary(_) | Db2Type::Blob => encode_ld_binary(value)?,
+        Db2Type::VarBinary(_) | Db2Type::Blob | Db2Type::LobBytes(_) => encode_ld_binary(value)?,
         Db2Type::RowId(len) => encode_fixed_string(value, *len as usize, descriptor.ccsid)?,
         Db2Type::Date => encode_exact_string(value, 10, descriptor.ccsid)?,
         Db2Type::Time => encode_exact_string(value, 8, descriptor.ccsid)?,
         Db2Type::Timestamp => encode_timestamp(value, descriptor.ccsid)?,
         Db2Type::Boolean => vec![if expect_bool(value)? { 1 } else { 0 }],
-        Db2Type::Graphic(_) | Db2Type::VarGraphic(_) | Db2Type::DbClob | Db2Type::Null => {
+        Db2Type::Graphic(_)
+        | Db2Type::VarGraphic(_)
+        | Db2Type::DbClob
+        | Db2Type::BlobLocator
+        | Db2Type::ClobLocator
+        | Db2Type::DbClobLocator
+        | Db2Type::Null => {
             return Err(Error::Other(format!(
                 "unsupported parameter type for SQLDTA encoding: {:?}",
                 descriptor.db2_type
@@ -2814,6 +2803,8 @@ fn input_length_for(
         | Db2Type::VarBinary(len)
         | Db2Type::Graphic(len)
         | Db2Type::VarGraphic(len)
+        | Db2Type::LobBytes(len)
+        | Db2Type::LobChar(len)
         | Db2Type::RowId(len) => *len,
         Db2Type::LongVarChar | Db2Type::Clob | Db2Type::Xml => {
             if length == 0 {
@@ -2831,6 +2822,7 @@ fn input_length_for(
         Db2Type::Time => 8,
         Db2Type::Timestamp => 26,
         Db2Type::Boolean => 1,
+        Db2Type::BlobLocator | Db2Type::ClobLocator | Db2Type::DbClobLocator => 4,
         Db2Type::Blob => {
             if length == 0 {
                 32767
@@ -2883,13 +2875,16 @@ fn input_drda_type_for(db2_type: &db2_proto::types::Db2Type, ccsid: u16, nullabl
             }
         }
         Db2Type::Binary(_) => 0x26,
-        Db2Type::VarBinary(_) | Db2Type::Blob => 0x28,
+        Db2Type::VarBinary(_) | Db2Type::Blob | Db2Type::LobBytes(_) => 0x28,
+        Db2Type::BlobLocator => 0x18,
+        Db2Type::ClobLocator => 0x1A,
+        Db2Type::DbClobLocator => 0x1C,
         Db2Type::RowId(_) => 0x26,
         Db2Type::Date => 0x20,
         Db2Type::Time => 0x22,
         Db2Type::Timestamp => 0x24,
         Db2Type::Graphic(_) => 0x36,
-        Db2Type::VarGraphic(_) | Db2Type::DbClob => 0x38,
+        Db2Type::VarGraphic(_) | Db2Type::DbClob | Db2Type::LobChar(_) => 0x38,
         Db2Type::Boolean => 0xBE,
         Db2Type::Null => {
             if matches!(ccsid, 37 | 500) {
@@ -2916,6 +2911,7 @@ fn process_query_frames(
     qrydsc_descriptors: &mut Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
     query_instance_id: &mut Option<Vec<u8>>,
     pending_row_bytes: &mut Vec<u8>,
+    extdta_payloads: &mut Vec<Vec<u8>>,
     end_of_query: &mut bool,
     diagnostics: &mut Vec<String>,
 ) -> Result<(), Error> {
@@ -3068,6 +3064,15 @@ fn process_query_frames(
                         pending_row_bytes.extend_from_slice(&obj.data);
                     }
                 }
+                codepoints::EXTDTA => {
+                    trace!("Received EXTDTA");
+                    diagnostics.push(format!(
+                        "extdta len={} preview={}",
+                        obj.data.len(),
+                        format_hex_preview(&obj.data, 128)
+                    ));
+                    extdta_payloads.push(obj.data);
+                }
                 codepoints::ENDQRYRM => {
                     trace!("Received ENDQRYRM");
                     *end_of_query = true;
@@ -3209,6 +3214,80 @@ fn descriptor_summary(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> Str
     }
 }
 
+fn apply_extdta_payloads_to_rows(
+    rows: &mut [Row],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+    extdta_payloads: &[Vec<u8>],
+) {
+    if rows.is_empty() || descriptors.is_empty() || extdta_payloads.is_empty() {
+        return;
+    }
+
+    let mut extdta_index = 0usize;
+    for row in rows {
+        for (column_index, value) in row.values_mut().iter_mut().enumerate() {
+            let Some(descriptor) = descriptors.get(column_index) else {
+                continue;
+            };
+            if !is_lob_descriptor(descriptor) || !value_needs_extdta(value) {
+                continue;
+            }
+            let Some(payload) = extdta_payloads.get(extdta_index) else {
+                return;
+            };
+            extdta_index += 1;
+            let payload = extdta_value_payload(payload, descriptor.nullable);
+            match descriptor.db2_type {
+                db2_proto::types::Db2Type::Blob
+                | db2_proto::types::Db2Type::BlobLocator
+                | db2_proto::types::Db2Type::LobBytes(_) => {
+                    *value = db2_proto::types::Db2Value::Blob(payload.to_vec());
+                }
+                db2_proto::types::Db2Type::Clob
+                | db2_proto::types::Db2Type::DbClob
+                | db2_proto::types::Db2Type::ClobLocator
+                | db2_proto::types::Db2Type::DbClobLocator
+                | db2_proto::types::Db2Type::LobChar(_) => {
+                    *value = db2_proto::types::Db2Value::Clob(
+                        String::from_utf8_lossy(payload).to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    matches!(
+        descriptor.db2_type,
+        db2_proto::types::Db2Type::Blob
+            | db2_proto::types::Db2Type::Clob
+            | db2_proto::types::Db2Type::DbClob
+            | db2_proto::types::Db2Type::BlobLocator
+            | db2_proto::types::Db2Type::ClobLocator
+            | db2_proto::types::Db2Type::DbClobLocator
+            | db2_proto::types::Db2Type::LobBytes(_)
+            | db2_proto::types::Db2Type::LobChar(_)
+    )
+}
+
+fn value_needs_extdta(value: &db2_proto::types::Db2Value) -> bool {
+    match value {
+        db2_proto::types::Db2Value::Clob(value) => value.starts_with("LOB locator 0x"),
+        db2_proto::types::Db2Value::Blob(value) => value.len() == 4,
+        _ => false,
+    }
+}
+
+fn extdta_value_payload(payload: &[u8], nullable: bool) -> &[u8] {
+    if nullable && matches!(payload.first(), Some(0x00 | 0xFF)) {
+        &payload[1..]
+    } else {
+        payload
+    }
+}
+
 fn frame_diagnostics(frames: &[DssFrame]) -> Vec<String> {
     let mut diagnostics = Vec::new();
     for (frame_index, frame) in frames.iter().enumerate() {
@@ -3227,7 +3306,10 @@ fn frame_diagnostics(frames: &[DssFrame]) -> Vec<String> {
                 for obj in objects {
                     let preview = if matches!(
                         obj.code_point,
-                        codepoints::SQLDARD | codepoints::QRYDSC | codepoints::QRYDTA
+                        codepoints::SQLDARD
+                            | codepoints::QRYDSC
+                            | codepoints::QRYDTA
+                            | codepoints::EXTDTA
                     ) {
                         format!(" preview={}", format_hex_preview(&obj.data, 96))
                     } else {
@@ -3267,6 +3349,7 @@ fn ddm_codepoint_name(code_point: u16) -> String {
         codepoints::OPNQRYRM => "OPNQRYRM",
         codepoints::QRYDSC => "QRYDSC",
         codepoints::QRYDTA => "QRYDTA",
+        codepoints::EXTDTA => "EXTDTA",
         codepoints::ENDQRYRM => "ENDQRYRM",
         codepoints::QRYNOPRM => "QRYNOPRM",
         codepoints::DTAMCHRM => "DTAMCHRM",

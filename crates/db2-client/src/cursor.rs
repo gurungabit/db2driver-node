@@ -83,6 +83,7 @@ impl Cursor {
             eprintln!("[db2-wire] CNTQRY received {} frame(s)", frames.len());
         }
         let mut rows = Vec::new();
+        let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
 
         for frame in &frames {
@@ -126,6 +127,10 @@ impl Cursor {
                             rows.push(Row::new(col_names, values));
                         }
                     }
+                    codepoints::EXTDTA => {
+                        trace!("Cursor: received EXTDTA");
+                        extdta_payloads.push(obj.data);
+                    }
                     codepoints::ENDQRYRM => {
                         trace!("Cursor: end of query");
                         end_of_query = true;
@@ -156,6 +161,8 @@ impl Cursor {
             }
         }
 
+        apply_extdta_payloads_to_rows(&mut rows, &self.descriptors, &extdta_payloads);
+
         if debug_hex_enabled() && self.fetch_calls <= 5 {
             eprintln!(
                 "[db2-wire] CNTQRY fetch#{} rows={} end={} pending_tail={}",
@@ -167,6 +174,80 @@ impl Cursor {
         }
 
         Ok((rows, end_of_query))
+    }
+}
+
+fn apply_extdta_payloads_to_rows(
+    rows: &mut [Row],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+    extdta_payloads: &[Vec<u8>],
+) {
+    if rows.is_empty() || descriptors.is_empty() || extdta_payloads.is_empty() {
+        return;
+    }
+
+    let mut extdta_index = 0usize;
+    for row in rows {
+        for (column_index, value) in row.values_mut().iter_mut().enumerate() {
+            let Some(descriptor) = descriptors.get(column_index) else {
+                continue;
+            };
+            if !is_lob_descriptor(descriptor) || !value_needs_extdta(value) {
+                continue;
+            }
+            let Some(payload) = extdta_payloads.get(extdta_index) else {
+                return;
+            };
+            extdta_index += 1;
+            let payload = extdta_value_payload(payload, descriptor.nullable);
+            match descriptor.db2_type {
+                db2_proto::types::Db2Type::Blob
+                | db2_proto::types::Db2Type::BlobLocator
+                | db2_proto::types::Db2Type::LobBytes(_) => {
+                    *value = db2_proto::types::Db2Value::Blob(payload.to_vec());
+                }
+                db2_proto::types::Db2Type::Clob
+                | db2_proto::types::Db2Type::DbClob
+                | db2_proto::types::Db2Type::ClobLocator
+                | db2_proto::types::Db2Type::DbClobLocator
+                | db2_proto::types::Db2Type::LobChar(_) => {
+                    *value = db2_proto::types::Db2Value::Clob(
+                        String::from_utf8_lossy(payload).to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    matches!(
+        descriptor.db2_type,
+        db2_proto::types::Db2Type::Blob
+            | db2_proto::types::Db2Type::Clob
+            | db2_proto::types::Db2Type::DbClob
+            | db2_proto::types::Db2Type::BlobLocator
+            | db2_proto::types::Db2Type::ClobLocator
+            | db2_proto::types::Db2Type::DbClobLocator
+            | db2_proto::types::Db2Type::LobBytes(_)
+            | db2_proto::types::Db2Type::LobChar(_)
+    )
+}
+
+fn value_needs_extdta(value: &db2_proto::types::Db2Value) -> bool {
+    match value {
+        db2_proto::types::Db2Value::Clob(value) => value.starts_with("LOB locator 0x"),
+        db2_proto::types::Db2Value::Blob(value) => value.len() == 4,
+        _ => false,
+    }
+}
+
+fn extdta_value_payload(payload: &[u8], nullable: bool) -> &[u8] {
+    if nullable && matches!(payload.first(), Some(0x00 | 0xFF)) {
+        &payload[1..]
+    } else {
+        payload
     }
 }
 

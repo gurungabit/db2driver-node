@@ -63,6 +63,7 @@ pub const SQLATTR: u16 = 0x2450; // SQL Statement Attributes
 pub const SQLSTT: u16 = 0x2414; // SQL Statement
 pub const QRYDSC: u16 = 0x241A; // Query Answer Set Description
 pub const QRYDTA: u16 = 0x241B; // Query Answer Set Data
+pub const EXTDTA: u16 = 0x146C; // Externalized Data, used for LOB payloads
 
 // ============================================================
 // Reply Messages

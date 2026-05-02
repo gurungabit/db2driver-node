@@ -129,6 +129,9 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
             | Db2Type::VarChar(_)
             | Db2Type::LongVarChar
             | Db2Type::Clob
+            | Db2Type::ClobLocator
+            | Db2Type::DbClobLocator
+            | Db2Type::LobChar(_)
             | Db2Type::Date
             | Db2Type::Time
             | Db2Type::Timestamp
@@ -730,6 +733,52 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                 _ => unreachable!(),
             }
         }
+        Db2Type::BlobLocator | Db2Type::ClobLocator | Db2Type::DbClobLocator => {
+            if data.len() < 4 {
+                return Err(ProtoError::BufferTooShort {
+                    expected: 4,
+                    actual: data.len(),
+                });
+            }
+            match &col.db2_type {
+                Db2Type::BlobLocator => Ok((Db2Value::Blob(data[..4].to_vec()), 4)),
+                Db2Type::ClobLocator | Db2Type::DbClobLocator => {
+                    Ok((Db2Value::Clob(format_lob_locator(&data[..4])), 4))
+                }
+                _ => unreachable!(),
+            }
+        }
+        Db2Type::LobBytes(len) => {
+            let flen = (*len & 0x7FFF) as usize;
+            if data.len() < flen {
+                return Err(ProtoError::BufferTooShort {
+                    expected: flen,
+                    actual: data.len(),
+                });
+            }
+            let bytes = &data[..flen];
+            if bytes_are_likely_text(bytes) {
+                Ok((
+                    Db2Value::VarChar(decode_character_bytes(bytes, col.ccsid)),
+                    flen,
+                ))
+            } else {
+                Ok((Db2Value::Blob(bytes.to_vec()), flen))
+            }
+        }
+        Db2Type::LobChar(len) => {
+            let flen = (*len & 0x7FFF) as usize;
+            if data.len() < flen {
+                return Err(ProtoError::BufferTooShort {
+                    expected: flen,
+                    actual: data.len(),
+                });
+            }
+            Ok((
+                Db2Value::Clob(decode_character_bytes(&data[..flen], col.ccsid)),
+                flen,
+            ))
+        }
         Db2Type::RowId(len) => {
             let flen = *len as usize;
             if data.len() < flen {
@@ -787,6 +836,15 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         out.push_str(&format!("{:02X}", byte));
     }
     out
+}
+
+fn bytes_are_likely_text(bytes: &[u8]) -> bool {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text
+            .chars()
+            .all(|ch| !ch.is_control() || matches!(ch, '\t' | '\n' | '\r')),
+        Err(_) => false,
+    }
 }
 
 fn decode_character_bytes(data: &[u8], ccsid: u16) -> String {
@@ -1074,5 +1132,43 @@ mod tests {
         let (values, consumed) = decode_row(&[0xDE, 0xAD, 0xBE, 0xEF], &cols).unwrap();
         assert_eq!(consumed, 4);
         assert_eq!(values[0], Db2Value::RowId("0xDEADBEEF".to_string()));
+    }
+
+    #[test]
+    fn test_lobbytes_consumes_fixed_length_without_varchar_prefix() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x50,
+            length: 8,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 1208,
+            db2_type: Db2Type::LobBytes(8),
+            byte_order: ByteOrder::BigEndian,
+        }];
+
+        let (values, consumed) = decode_row(b"D356673C", &cols).unwrap();
+        assert_eq!(consumed, 8);
+        assert_eq!(values[0], Db2Value::VarChar("D356673C".to_string()));
+    }
+
+    #[test]
+    fn test_lobchar_decodes_fixed_length_clob_text() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x51,
+            length: 11,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 1208,
+            db2_type: Db2Type::LobChar(11),
+            byte_order: ByteOrder::BigEndian,
+        }];
+
+        let (values, consumed) = decode_row(b"hello clob!", &cols).unwrap();
+        assert_eq!(consumed, 11);
+        assert_eq!(values[0], Db2Value::Clob("hello clob!".to_string()));
     }
 }
