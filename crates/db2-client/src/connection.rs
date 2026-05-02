@@ -2676,6 +2676,11 @@ fn frame_diagnostics(frames: &[DssFrame]) -> Vec<String> {
                         obj.data.len(),
                         preview
                     ));
+                    if obj.code_point == codepoints::SQLDARD {
+                        diagnostics.extend(db2_proto::replies::sqldard::diagnose_column_names(
+                            &obj.data,
+                        ));
+                    }
                 }
             }
             Err(err) => diagnostics.push(format!(

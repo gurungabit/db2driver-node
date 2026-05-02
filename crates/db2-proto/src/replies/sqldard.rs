@@ -346,6 +346,148 @@ pub fn scan_column_names(data: &[u8]) -> Vec<String> {
     best_names
 }
 
+pub fn diagnose_column_names(data: &[u8]) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+
+    match parse_sqldard_data(data) {
+        Ok(dard) => {
+            let names = dard
+                .columns
+                .iter()
+                .take(48)
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            diagnostics.push(format!(
+                "sqldard_name_diag parsed_columns={} parsed_real_names={} parsed_names=[{}]",
+                dard.columns.len(),
+                dard.columns
+                    .iter()
+                    .filter(|column| !is_generated_column_name(&column.name))
+                    .count(),
+                names
+            ));
+        }
+        Err(err) => diagnostics.push(format!("sqldard_name_diag parse_error={}", err)),
+    }
+
+    let scanned_names = scan_column_names(data);
+    diagnostics.push(format!(
+        "sqldard_name_diag structured_scan_count={} structured_scan_names=[{}]",
+        scanned_names.len(),
+        scanned_names
+            .iter()
+            .take(64)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
+
+    let be_candidates = scan_len_prefixed_identifier_candidates(data, LenPrefix::BigEndianU16);
+    diagnostics.push(format!(
+        "sqldard_name_diag be_len_candidates count={} first=[{}]",
+        be_candidates.len(),
+        be_candidates
+            .iter()
+            .take(80)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("; ")
+    ));
+
+    let one_byte_candidates = scan_len_prefixed_identifier_candidates(data, LenPrefix::OneByte);
+    diagnostics.push(format!(
+        "sqldard_name_diag one_byte_candidates count={} first=[{}]",
+        one_byte_candidates.len(),
+        one_byte_candidates
+            .iter()
+            .take(80)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("; ")
+    ));
+
+    diagnostics
+}
+
+#[derive(Clone, Copy)]
+enum LenPrefix {
+    BigEndianU16,
+    OneByte,
+}
+
+fn scan_len_prefixed_identifier_candidates(data: &[u8], prefix: LenPrefix) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut last_text = String::new();
+    let mut last_offset = usize::MAX;
+
+    for offset in 0..data.len() {
+        let Some((text_start, len)) = read_candidate_len(data, offset, prefix) else {
+            continue;
+        };
+        let end = text_start + len;
+        if end > data.len() || !(2..=128).contains(&len) {
+            continue;
+        }
+
+        let bytes = &data[text_start..end];
+        if !is_probably_name(bytes) {
+            continue;
+        }
+
+        let text = decode_text(bytes);
+        if !is_probably_identifier_text(&text) {
+            continue;
+        }
+
+        if text == last_text && offset.saturating_sub(last_offset) < 8 {
+            continue;
+        }
+
+        candidates.push(format!(
+            "@{} len={} text={} ctx={}",
+            offset,
+            len,
+            text,
+            hex_context(data, offset, end)
+        ));
+        last_text = text;
+        last_offset = offset;
+    }
+
+    candidates
+}
+
+fn read_candidate_len(data: &[u8], offset: usize, prefix: LenPrefix) -> Option<(usize, usize)> {
+    match prefix {
+        LenPrefix::BigEndianU16 => {
+            if offset + 2 > data.len() {
+                return None;
+            }
+            Some((
+                offset + 2,
+                u16::from_be_bytes([data[offset], data[offset + 1]]) as usize,
+            ))
+        }
+        LenPrefix::OneByte => {
+            if offset >= data.len() {
+                return None;
+            }
+            Some((offset + 1, data[offset] as usize))
+        }
+    }
+}
+
+fn hex_context(data: &[u8], start: usize, end: usize) -> String {
+    let context_start = start.saturating_sub(8);
+    let context_end = (end + 8).min(data.len());
+    data[context_start..context_end]
+        .iter()
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn scan_descriptor_name(data: &[u8], descriptor_offset: usize) -> Option<(String, usize)> {
     let mut offset = descriptor_offset.checked_add(16)?;
     if offset >= data.len() {
@@ -1182,6 +1324,18 @@ mod tests {
 
         let names = scan_column_names(&data);
         assert_eq!(names, vec!["POLICY_ID", "POLICY_NUM"]);
+    }
+
+    #[test]
+    fn test_diagnose_column_names_reports_len_prefixed_candidates() {
+        let mut data = vec![0; 16];
+        data.extend_from_slice(&8u16.to_be_bytes());
+        data.extend_from_slice(b"POLICYID");
+
+        let diagnostics = diagnose_column_names(&data);
+        assert!(diagnostics
+            .iter()
+            .any(|line| line.contains("text=POLICYID")));
     }
 
     fn unnamed_standard_descriptor(length: u64, sql_type: u16, ccsid: u16) -> Vec<u8> {
