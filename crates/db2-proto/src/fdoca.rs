@@ -324,6 +324,79 @@ pub fn decode_rows_with_tail(
     Ok(rows)
 }
 
+/// Explain how far a QRYDTA row block can be decoded with the given descriptors.
+///
+/// This is intended for diagnostics when a z/OS server returns data but the
+/// client cannot yet materialize a row. It reports the first column/offset where
+/// decoding stops, including a short byte preview around the failure.
+pub fn describe_decode_progress(data: &[u8], columns: &[ColumnDescriptor]) -> String {
+    if columns.is_empty() {
+        return format!("no descriptors; data_len={}", data.len());
+    }
+
+    let (prefix_len, body) = if data.len() >= 2 && data[0] == 0xFF {
+        (2usize, &data[2..])
+    } else {
+        (0usize, data)
+    };
+
+    let mut body_offset = 0usize;
+    for col in columns {
+        let col_start = body_offset;
+        if col.nullable {
+            if body_offset >= body.len() {
+                return format!(
+                    "stopped before null indicator: column={} abs_offset={} body_offset={} type={:?} drda=0x{:02X} remaining=0",
+                    col.column_index + 1,
+                    prefix_len + body_offset,
+                    body_offset,
+                    col.db2_type,
+                    col.drda_type
+                );
+            }
+
+            let null_indicator = body[body_offset];
+            body_offset += 1;
+            if null_indicator == 0xFF {
+                continue;
+            }
+        }
+
+        match decode_column_value(&body[body_offset..], col) {
+            Ok((_value, consumed)) => {
+                body_offset += consumed;
+            }
+            Err(err) => {
+                return format!(
+                    "stopped at column={} abs_offset={} body_offset={} col_start={} type={:?} drda=0x{:02X} len={} nullable={} ccsid={} byte_order={:?} err={} remaining={} preview={}",
+                    col.column_index + 1,
+                    prefix_len + body_offset,
+                    body_offset,
+                    col_start,
+                    col.db2_type,
+                    col.drda_type,
+                    col.length,
+                    col.nullable,
+                    col.ccsid,
+                    col.byte_order,
+                    err,
+                    body.len().saturating_sub(body_offset),
+                    format_hex_preview(&body[body_offset..], 96)
+                );
+            }
+        }
+    }
+
+    format!(
+        "decoded one row: consumed={} total={} columns={} remaining={} preview={}",
+        prefix_len + body_offset,
+        data.len(),
+        columns.len(),
+        body.len().saturating_sub(body_offset),
+        format_hex_preview(&body[body_offset..], 96)
+    )
+}
+
 fn format_hex_preview(data: &[u8], max_bytes: usize) -> String {
     let take = data.len().min(max_bytes);
     let mut out = String::new();

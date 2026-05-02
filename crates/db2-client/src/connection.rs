@@ -870,6 +870,13 @@ impl ClientInner {
         let mut pending_row_bytes = Vec::new();
         let mut end_of_query = false;
         let mut diagnostics = frame_diagnostics(frames);
+        if let Some(descriptors) = sqldard_descriptors.as_ref() {
+            diagnostics.push(format!(
+                "initial_descriptors count={} {}",
+                descriptors.len(),
+                descriptor_summary(descriptors)
+            ));
+        }
 
         process_query_frames(
             frames,
@@ -880,6 +887,7 @@ impl ClientInner {
             &mut query_instance_id,
             &mut pending_row_bytes,
             &mut end_of_query,
+            &mut diagnostics,
         )?;
 
         let frame_drain_timeout = self.frame_drain_timeout();
@@ -920,6 +928,7 @@ impl ClientInner {
                 &mut query_instance_id,
                 &mut pending_row_bytes,
                 &mut end_of_query,
+                &mut diagnostics,
             )?;
         }
 
@@ -950,6 +959,7 @@ impl ClientInner {
                     &mut query_instance_id,
                     &mut pending_row_bytes,
                     &mut end_of_query,
+                    &mut diagnostics,
                 )?;
 
                 if end_of_query
@@ -1003,6 +1013,39 @@ impl ClientInner {
         } else {
             Vec::new()
         };
+
+        let active_descriptors = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
+        diagnostics.push(format!(
+            "decode_final rows={} columns={} pending_tail={} qrydsc_desc={} sqldard_desc={} active_desc={}",
+            rows.len(),
+            columns.len(),
+            pending_row_bytes.len(),
+            qrydsc_descriptors.as_ref().map(|v| v.len()).unwrap_or(0),
+            sqldard_descriptors.as_ref().map(|v| v.len()).unwrap_or(0),
+            active_descriptors.map(|v| v.len()).unwrap_or(0)
+        ));
+        if let Some(descriptors) = active_descriptors {
+            diagnostics.push(format!(
+                "decode_final descriptors {}",
+                descriptor_summary(descriptors)
+            ));
+            if !pending_row_bytes.is_empty() {
+                diagnostics.push(format!(
+                    "decode_final pending_tail_preview={}",
+                    format_hex_preview(&pending_row_bytes, 160)
+                ));
+                diagnostics.push(format!(
+                    "decode_final progress={}",
+                    db2_proto::fdoca::describe_decode_progress(&pending_row_bytes, descriptors)
+                ));
+            }
+        } else if !pending_row_bytes.is_empty() {
+            diagnostics.push(format!(
+                "decode_final pending_without_descriptors len={} preview={}",
+                pending_row_bytes.len(),
+                format_hex_preview(&pending_row_bytes, 160)
+            ));
+        }
 
         if debug_hex_enabled() {
             eprintln!(
@@ -2275,6 +2318,7 @@ fn process_query_frames(
     query_instance_id: &mut Option<Vec<u8>>,
     pending_row_bytes: &mut Vec<u8>,
     end_of_query: &mut bool,
+    diagnostics: &mut Vec<String>,
 ) -> Result<(), Error> {
     for frame in frames {
         for obj in ClientInner::parse_ddm_objects(&frame.payload)? {
@@ -2326,6 +2370,11 @@ fn process_query_frames(
                                     descriptors.len()
                                 );
                             }
+                            diagnostics.push(format!(
+                                "qrydsc_descriptors count={} {}",
+                                descriptors.len(),
+                                descriptor_summary(&descriptors)
+                            ));
                             *qrydsc_descriptors = Some(descriptors);
                             decode_pending_query_data(
                                 column_info,
@@ -2333,6 +2382,7 @@ fn process_query_frames(
                                 sqldard_descriptors,
                                 qrydsc_descriptors,
                                 pending_row_bytes,
+                                diagnostics,
                             )?;
                         } else if debug_hex_enabled() {
                             eprintln!("[db2-wire] parsed 0 QRYDSC descriptor(s)");
@@ -2366,15 +2416,43 @@ fn process_query_frames(
                                 );
                             }
                         }
+                        let rows_before = rows.len();
+                        let pending_before = pending_row_bytes.len();
                         let decoded_rows = db2_proto::fdoca::decode_rows_with_tail(
                             &obj.data,
                             descs,
                             pending_row_bytes,
                         )
                         .map_err(|e| Error::Protocol(e.to_string()))?;
+                        let decoded_count = decoded_rows.len();
                         for values in decoded_rows {
                             let col_names = row_column_names(column_info, values.len());
                             rows.push(Row::new(col_names, values));
+                        }
+                        diagnostics.push(format!(
+                            "qrydta_decode data_len={} pending_before={} rows_decoded={} rows_total={} pending_after={} descriptors={} preview={}",
+                            obj.data.len(),
+                            pending_before,
+                            decoded_count,
+                            rows.len(),
+                            pending_row_bytes.len(),
+                            descs.len(),
+                            format_hex_preview(&obj.data, 128)
+                        ));
+                        if decoded_count == 0 || rows.len() == rows_before {
+                            let progress_bytes = if pending_row_bytes.is_empty() {
+                                obj.data.as_slice()
+                            } else {
+                                pending_row_bytes.as_slice()
+                            };
+                            diagnostics.push(format!(
+                                "qrydta_decode progress={}",
+                                db2_proto::fdoca::describe_decode_progress(progress_bytes, descs)
+                            ));
+                            diagnostics.push(format!(
+                                "qrydta_decode descriptors {}",
+                                descriptor_summary(descs)
+                            ));
                         }
                     } else {
                         if debug_hex_enabled() {
@@ -2383,6 +2461,11 @@ fn process_query_frames(
                                 obj.data.len()
                             );
                         }
+                        diagnostics.push(format!(
+                            "qrydta_buffered_without_descriptors len={} preview={}",
+                            obj.data.len(),
+                            format_hex_preview(&obj.data, 128)
+                        ));
                         pending_row_bytes.extend_from_slice(&obj.data);
                     }
                 }
@@ -2406,6 +2489,11 @@ fn process_query_frames(
                                 descriptors.len()
                             );
                         }
+                        diagnostics.push(format!(
+                            "sqldard_descriptors count={} {}",
+                            descriptors.len(),
+                            descriptor_summary(&descriptors)
+                        ));
                         *sqldard_descriptors = Some(descriptors);
                         decode_pending_query_data(
                             column_info,
@@ -2413,6 +2501,7 @@ fn process_query_frames(
                             sqldard_descriptors,
                             qrydsc_descriptors,
                             pending_row_bytes,
+                            diagnostics,
                         )?;
                     } else if debug_hex_enabled() {
                         eprintln!("[db2-wire] parsed 0 SQLDARD descriptor(s) in query reply");
@@ -2450,6 +2539,7 @@ fn decode_pending_query_data(
     sqldard_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
     qrydsc_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
     pending_row_bytes: &mut Vec<u8>,
+    diagnostics: &mut Vec<String>,
 ) -> Result<(), Error> {
     if pending_row_bytes.is_empty() {
         return Ok(());
@@ -2462,16 +2552,62 @@ fn decode_pending_query_data(
         return Ok(());
     }
 
+    let pending_before = pending_row_bytes.len();
     let mut buffered = std::mem::take(pending_row_bytes);
     let decoded_rows = db2_proto::fdoca::decode_rows_with_tail(&[], descs, &mut buffered)
         .map_err(|e| Error::Protocol(e.to_string()))?;
+    let decoded_count = decoded_rows.len();
     for values in decoded_rows {
         let col_names = row_column_names(column_info, values.len());
         rows.push(Row::new(col_names, values));
     }
     *pending_row_bytes = buffered;
+    diagnostics.push(format!(
+        "pending_qrydta_decode pending_before={} rows_decoded={} rows_total={} pending_after={} descriptors={}",
+        pending_before,
+        decoded_count,
+        rows.len(),
+        pending_row_bytes.len(),
+        descs.len()
+    ));
+    if decoded_count == 0 && !pending_row_bytes.is_empty() {
+        diagnostics.push(format!(
+            "pending_qrydta_decode progress={}",
+            db2_proto::fdoca::describe_decode_progress(pending_row_bytes, descs)
+        ));
+        diagnostics.push(format!(
+            "pending_qrydta_decode descriptors {}",
+            descriptor_summary(descs)
+        ));
+    }
 
     Ok(())
+}
+
+fn descriptor_summary(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> String {
+    let shown = descriptors
+        .iter()
+        .take(16)
+        .map(|desc| {
+            format!(
+                "#{} drda=0x{:02X} type={:?} len={} nullable={} ccsid={} order={:?}",
+                desc.column_index + 1,
+                desc.drda_type,
+                desc.db2_type,
+                desc.length,
+                desc.nullable,
+                desc.ccsid,
+                desc.byte_order
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    if descriptors.len() > 16 {
+        format!("first16=[{}] total={}", shown, descriptors.len())
+    } else {
+        format!("all=[{}]", shown)
+    }
 }
 
 fn frame_diagnostics(frames: &[DssFrame]) -> Vec<String> {

@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.40](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.40) (2026-05-02)
+
+### Bug Fixes
+
+- include z/OS row decode diagnostics for pending QRYDTA blocks
+
 ## [0.1.7-zos.39](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.39) (2026-05-02)
 
 ### Bug Fixes
