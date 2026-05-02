@@ -1691,23 +1691,10 @@ fn parse_sqldard_columns(obj: &DdmObject) -> Vec<ColumnInfo> {
         .iter()
         .all(|col| is_generated_column_name(&col.name));
 
-    if !scanned_names.is_empty()
-        && (dard.columns.is_empty() || has_only_generated_names)
-        && scanned_names.len() >= dard.columns.len()
+    if !dard.columns.is_empty()
+        && has_only_generated_names
+        && scanned_names.len() == dard.columns.len()
     {
-        if dard.columns.is_empty() {
-            return scanned_names
-                .into_iter()
-                .map(|name| ColumnInfo {
-                    name,
-                    type_name: "Unknown".to_string(),
-                    nullable: true,
-                    precision: None,
-                    scale: None,
-                })
-                .collect();
-        }
-
         return dard
             .columns
             .into_iter()
