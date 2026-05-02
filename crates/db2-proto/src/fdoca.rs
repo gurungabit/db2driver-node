@@ -491,11 +491,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = if col.ccsid == 500 || col.ccsid == 37 {
-                crate::codepage::ebcdic037_to_utf8(&data[..flen])
-            } else {
-                String::from_utf8_lossy(&data[..flen]).to_string()
-            };
+            let s = decode_character_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Char(s), flen))
         }
         Db2Type::VarChar(_) | Db2Type::LongVarChar => {
@@ -513,11 +509,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = if col.ccsid == 500 || col.ccsid == 37 {
-                crate::codepage::ebcdic037_to_utf8(&data[2..total])
-            } else {
-                String::from_utf8_lossy(&data[2..total]).to_string()
-            };
+            let s = decode_character_bytes(&data[2..total], col.ccsid);
             Ok((Db2Value::VarChar(s), total))
         }
         Db2Type::Binary(len) => {
@@ -555,11 +547,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = if col.ccsid == 500 || col.ccsid == 37 {
-                crate::codepage::ebcdic037_to_utf8(&data[..flen])
-            } else {
-                String::from_utf8_lossy(&data[..flen]).to_string()
-            };
+            let s = decode_character_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Date(s), flen))
         }
         Db2Type::Time => {
@@ -570,11 +558,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = if col.ccsid == 500 || col.ccsid == 37 {
-                crate::codepage::ebcdic037_to_utf8(&data[..flen])
-            } else {
-                String::from_utf8_lossy(&data[..flen]).to_string()
-            };
+            let s = decode_character_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Time(s), flen))
         }
         Db2Type::Timestamp => {
@@ -590,11 +574,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = if col.ccsid == 500 || col.ccsid == 37 {
-                crate::codepage::ebcdic037_to_utf8(&data[..flen])
-            } else {
-                String::from_utf8_lossy(&data[..flen]).to_string()
-            };
+            let s = decode_character_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Timestamp(s), flen))
         }
         Db2Type::Boolean => {
@@ -636,14 +616,14 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
             }
         }
         Db2Type::Graphic(len) => {
-            let flen = (*len as usize) * 2;
+            let flen = *len as usize;
             if data.len() < flen {
                 return Err(ProtoError::BufferTooShort {
                     expected: flen,
                     actual: data.len(),
                 });
             }
-            let s = String::from_utf8_lossy(&data[..flen]).to_string();
+            let s = decode_graphic_bytes(&data[..flen], col.ccsid);
             Ok((Db2Value::Char(s), flen))
         }
         Db2Type::VarGraphic(_) => {
@@ -653,8 +633,7 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let char_len = u16::from_be_bytes([data[0], data[1]]) as usize;
-            let byte_len = char_len * 2;
+            let byte_len = u16::from_be_bytes([data[0], data[1]]) as usize;
             let total = 2 + byte_len;
             if data.len() < total {
                 return Err(ProtoError::BufferTooShort {
@@ -662,11 +641,37 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let s = String::from_utf8_lossy(&data[2..total]).to_string();
+            let s = decode_graphic_bytes(&data[2..total], col.ccsid);
             Ok((Db2Value::VarChar(s), total))
         }
         Db2Type::Null => Ok((Db2Value::Null, 0)),
     }
+}
+
+fn decode_character_bytes(data: &[u8], ccsid: u16) -> String {
+    if matches!(ccsid, 37 | 500) {
+        return crate::codepage::ebcdic037_to_utf8(data);
+    }
+
+    if data.is_ascii() {
+        return String::from_utf8_lossy(data).to_string();
+    }
+
+    // z/OS compact QRYDSC often omits CCSID detail even though row bytes are
+    // still EBCDIC. Prefer readable text for those result blocks.
+    crate::codepage::ebcdic037_to_utf8(data)
+}
+
+fn decode_graphic_bytes(data: &[u8], ccsid: u16) -> String {
+    if matches!(ccsid, 1200 | 13488) && data.len() % 2 == 0 {
+        let units: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+
+    decode_character_bytes(data, ccsid)
 }
 
 /// Parse row data from QRYDTA using a simple heuristic: assume `num_columns`
@@ -811,5 +816,42 @@ mod tests {
         let (values, consumed) = decode_row(&row_data, &descriptors).unwrap();
         assert_eq!(consumed, row_data.len());
         assert_eq!(values[0], Db2Value::Integer(1));
+    }
+
+    #[test]
+    fn test_graphic_lengths_are_decoded_as_bytes() {
+        let cols = vec![
+            ColumnDescriptor {
+                column_index: 0,
+                drda_type: 0x3C,
+                length: 4,
+                precision: 0,
+                scale: 0,
+                nullable: false,
+                ccsid: 1200,
+                db2_type: Db2Type::Graphic(4),
+                byte_order: ByteOrder::BigEndian,
+            },
+            ColumnDescriptor {
+                column_index: 1,
+                drda_type: 0x3E,
+                length: 8,
+                precision: 0,
+                scale: 0,
+                nullable: false,
+                ccsid: 1200,
+                db2_type: Db2Type::VarGraphic(8),
+                byte_order: ByteOrder::BigEndian,
+            },
+        ];
+
+        let row_data = vec![
+            0x00, 0x41, 0x00, 0x42, // GRAPHIC "AB" as 4 bytes
+            0x00, 0x04, 0x00, 0x43, 0x00, 0x44, // VARGRAPHIC "CD" as 4 bytes
+        ];
+        let (values, consumed) = decode_row(&row_data, &cols).unwrap();
+        assert_eq!(consumed, row_data.len());
+        assert_eq!(values[0], Db2Value::Char("AB".to_string()));
+        assert_eq!(values[1], Db2Value::VarChar("CD".to_string()));
     }
 }

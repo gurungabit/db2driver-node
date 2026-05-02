@@ -67,16 +67,20 @@ pub fn parse_sqldard(obj: &DdmObject) -> Result<SqlDard> {
 /// control-group lengths remain network byte order, while the SQLTYPE
 /// identifiers and numeric payload fields are little-endian.
 pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
+    if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::BigEndian) {
+        if !standard.columns.is_empty() {
+            return Ok(standard);
+        }
+    }
+
     if let Some(compact) = parse_compact_sqldard_data(data)? {
         return Ok(compact);
     }
 
-    if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::BigEndian) {
-        return Ok(standard);
-    }
-
     if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::LittleEndian) {
-        return Ok(standard);
+        if !standard.columns.is_empty() {
+            return Ok(standard);
+        }
     }
 
     if data.is_empty() {
