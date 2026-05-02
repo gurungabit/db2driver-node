@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.31](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.31) (2026-05-02)
+
+### Bug Fixes
+
+- decode standard z/OS SQLDARD descriptors and big-endian row values
+
 ## [0.1.7-zos.30](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.30) (2026-05-01)
 
 ### Bug Fixes

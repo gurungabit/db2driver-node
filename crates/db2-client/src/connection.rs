@@ -1628,6 +1628,7 @@ fn parse_sqldard_descriptors(obj: &DdmObject) -> Vec<db2_proto::fdoca::ColumnDes
             nullable: col.nullable,
             ccsid: col.ccsid,
             db2_type: col.db2_type,
+            byte_order: col.byte_order,
         })
         .collect()
 }
@@ -1648,6 +1649,7 @@ fn parse_input_sqldard_descriptors(obj: &DdmObject) -> Vec<db2_proto::fdoca::Col
                     nullable: true,
                     ccsid: col.ccsid,
                     db2_type: col.db2_type,
+                    byte_order: db2_proto::fdoca::ByteOrder::LittleEndian,
                 })
                 .collect();
         }
@@ -1716,6 +1718,7 @@ fn parse_input_sqldard_compact(data: &[u8]) -> Vec<db2_proto::fdoca::ColumnDescr
             nullable,
             ccsid: 1208,
             db2_type,
+            byte_order: db2_proto::fdoca::ByteOrder::LittleEndian,
         });
 
         offset = end;
@@ -1857,6 +1860,7 @@ fn infer_parameter_descriptors(
                 nullable: true,
                 ccsid: 1208,
                 db2_type,
+                byte_order: db2_proto::fdoca::ByteOrder::LittleEndian,
             })
         })
         .collect()

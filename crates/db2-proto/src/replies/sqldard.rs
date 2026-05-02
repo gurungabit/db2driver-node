@@ -2,6 +2,7 @@
 use crate::codepage::ebcdic037_to_utf8;
 use crate::codepoints::SQLDARD;
 use crate::ddm::DdmObject;
+use crate::fdoca::ByteOrder;
 use crate::replies::sqlcard::{parse_sqlcard_data, SqlCard};
 use crate::types::Db2Type;
 use crate::{ProtoError, Result};
@@ -27,6 +28,8 @@ pub struct ColumnMetadata {
     pub scale: u8,
     /// CCSID of the column data.
     pub ccsid: u16,
+    /// Byte order used for fixed-width numeric row values.
+    pub byte_order: ByteOrder,
     /// Base table name (if available).
     pub base_table_name: String,
     /// Schema name (if available).
@@ -66,6 +69,14 @@ pub fn parse_sqldard(obj: &DdmObject) -> Result<SqlDard> {
 pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
     if let Some(compact) = parse_compact_sqldard_data(data)? {
         return Ok(compact);
+    }
+
+    if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::BigEndian) {
+        return Ok(standard);
+    }
+
+    if let Ok(standard) = parse_standard_sqldard_data(data, ByteOrder::LittleEndian) {
+        return Ok(standard);
     }
 
     if data.is_empty() {
@@ -123,6 +134,59 @@ pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
         }
 
         offset = end;
+    }
+
+    Ok(SqlDard {
+        sqlcard,
+        num_columns: columns.len() as u16,
+        columns,
+    })
+}
+
+fn parse_standard_sqldard_data(data: &[u8], byte_order: ByteOrder) -> Result<SqlDard> {
+    if data.is_empty() {
+        return Err(ProtoError::Other("empty SQLDARD data".into()));
+    }
+
+    let (sqlcard, mut offset) = consume_sqlca_group(data)?;
+
+    if offset >= data.len() {
+        return Ok(SqlDard {
+            sqlcard,
+            num_columns: 0,
+            columns: Vec::new(),
+        });
+    }
+
+    let dh_flag = data[offset];
+    offset += 1;
+    if dh_flag != 0xFF {
+        offset = skip_sqldhgrp(data, offset)?;
+    }
+
+    if offset + 2 > data.len() {
+        return Ok(SqlDard {
+            sqlcard,
+            num_columns: 0,
+            columns: Vec::new(),
+        });
+    }
+
+    let declared_columns = read_u16(byte_order, [data[offset], data[offset + 1]]) as usize;
+    if declared_columns > 512 {
+        return Err(ProtoError::Other(format!(
+            "implausible SQLDARD column count: {}",
+            declared_columns
+        )));
+    }
+    offset += 2;
+
+    let mut columns = Vec::with_capacity(declared_columns);
+    for index in 0..declared_columns {
+        let (column, next_offset) =
+            parse_standard_column_descriptor(data, offset, index, byte_order)?;
+        columns.push(column);
+        offset = next_offset;
     }
 
     Ok(SqlDard {
@@ -376,10 +440,269 @@ fn parse_column_descriptor(data: &[u8], index: usize) -> Result<ColumnMetadata> 
         precision,
         scale,
         ccsid,
+        byte_order: ByteOrder::LittleEndian,
         base_table_name: String::new(),
         schema_name: String::new(),
         label: String::new(),
     })
+}
+
+fn parse_standard_column_descriptor(
+    data: &[u8],
+    offset: usize,
+    index: usize,
+    byte_order: ByteOrder,
+) -> Result<(ColumnMetadata, usize)> {
+    if offset + 16 > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: offset + 16,
+            actual: data.len(),
+        });
+    }
+
+    let precision = read_u16(byte_order, [data[offset], data[offset + 1]]) as u8;
+    let scale = read_u16(byte_order, [data[offset + 2], data[offset + 3]]) as u8;
+    let raw_length = read_u64(
+        byte_order,
+        [
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ],
+    );
+    let sql_type = read_u16(byte_order, [data[offset + 12], data[offset + 13]]);
+    let ccsid = read_u16(byte_order, [data[offset + 14], data[offset + 15]]);
+
+    if !is_known_sql_type(sql_type) {
+        return Err(ProtoError::Other(format!(
+            "unknown SQLDARD SQLTYPE: {}",
+            sql_type
+        )));
+    }
+
+    let nullable = (sql_type & 0x0001) != 0;
+    let db2_type = db2_type_from_sqlda(sql_type, raw_length, precision, scale);
+    let length = normalized_length(sql_type, raw_length, precision, &db2_type);
+    let drda_type = drda_type_for(&db2_type, nullable);
+
+    let mut next_offset = offset + 16;
+    let mut name = None;
+    let mut label = String::new();
+    let mut base_table_name = String::new();
+    let mut schema_name = String::new();
+
+    if next_offset < data.len() {
+        let opt_flag = data[next_offset];
+        next_offset += 1;
+        if opt_flag != 0xFF {
+            next_offset = skip_short(data, next_offset)?;
+
+            let (name_m, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+            let (name_s, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+            if !name_m.is_empty() {
+                name = Some(name_m);
+            } else if !name_s.is_empty() {
+                name = Some(name_s);
+            }
+
+            let (label_m, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+            let (label_s, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+            label = if !label_m.is_empty() {
+                label_m
+            } else {
+                label_s
+            };
+
+            let (_comment_m, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+            let (_comment_s, next) = read_len_prefixed_string(data, next_offset)?;
+            next_offset = next;
+
+            next_offset = skip_sqludtgrp(data, next_offset)?;
+            let (base_name, schema_name_candidate, next) = skip_sqldxgrp(data, next_offset)?;
+            next_offset = next;
+            base_table_name = base_name;
+            schema_name = schema_name_candidate;
+        }
+    }
+
+    Ok((
+        ColumnMetadata {
+            index,
+            name: name.unwrap_or_else(|| format!("COL{}", index + 1)),
+            db2_type,
+            drda_type,
+            length,
+            nullable,
+            precision,
+            scale,
+            ccsid,
+            byte_order,
+            base_table_name,
+            schema_name,
+            label,
+        },
+        next_offset,
+    ))
+}
+
+fn skip_short(data: &[u8], offset: usize) -> Result<usize> {
+    if offset + 2 > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: offset + 2,
+            actual: data.len(),
+        });
+    }
+    Ok(offset + 2)
+}
+
+fn read_len_prefixed_string(data: &[u8], offset: usize) -> Result<(String, usize)> {
+    if offset + 2 > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: offset + 2,
+            actual: data.len(),
+        });
+    }
+
+    let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+    let start = offset + 2;
+    let end = start + len;
+    if end > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: end,
+            actual: data.len(),
+        });
+    }
+
+    Ok((decode_text(&data[start..end]), end))
+}
+
+fn skip_sqludtgrp(data: &[u8], mut offset: usize) -> Result<usize> {
+    if offset >= data.len() {
+        return Ok(offset);
+    }
+
+    let flag = data[offset];
+    offset += 1;
+    if flag == 0xFF {
+        return Ok(offset);
+    }
+
+    if offset + 4 > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: offset + 4,
+            actual: data.len(),
+        });
+    }
+    offset += 4;
+
+    for _ in 0..5 {
+        offset = skip_len_prefixed_string(data, offset)?;
+    }
+
+    Ok(offset)
+}
+
+fn skip_sqldxgrp(data: &[u8], mut offset: usize) -> Result<(String, String, usize)> {
+    if offset >= data.len() {
+        return Ok((String::new(), String::new(), offset));
+    }
+
+    let flag = data[offset];
+    offset += 1;
+    if flag == 0xFF {
+        return Ok((String::new(), String::new(), offset));
+    }
+
+    if offset + 8 > data.len() {
+        return Err(ProtoError::BufferTooShort {
+            expected: offset + 8,
+            actual: data.len(),
+        });
+    }
+    offset += 8;
+
+    let (_rdbnam, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (_corname_m, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (_corname_s, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (basename_m, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (basename_s, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (schema_m, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (schema_s, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (_xname_m, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+    let (_xname_s, next) = read_len_prefixed_string(data, offset)?;
+    offset = next;
+
+    let base_name = if !basename_m.is_empty() {
+        basename_m
+    } else {
+        basename_s
+    };
+    let schema_name = if !schema_m.is_empty() {
+        schema_m
+    } else {
+        schema_s
+    };
+
+    Ok((base_name, schema_name, offset))
+}
+
+fn read_u16(byte_order: ByteOrder, bytes: [u8; 2]) -> u16 {
+    match byte_order {
+        ByteOrder::BigEndian => u16::from_be_bytes(bytes),
+        ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
+    }
+}
+
+fn read_u64(byte_order: ByteOrder, bytes: [u8; 8]) -> u64 {
+    match byte_order {
+        ByteOrder::BigEndian => u64::from_be_bytes(bytes),
+        ByteOrder::LittleEndian => u64::from_le_bytes(bytes),
+    }
+}
+
+fn is_known_sql_type(sql_type: u16) -> bool {
+    matches!(
+        sql_type & !1,
+        384 | 388
+            | 392
+            | 404
+            | 408
+            | 412
+            | 448
+            | 452
+            | 456
+            | 464
+            | 468
+            | 472
+            | 480
+            | 484
+            | 488
+            | 492
+            | 496
+            | 500
+            | 908
+            | 912
+            | 988
+            | 996
+    )
 }
 
 fn decode_ccsid(bytes: [u8; 2]) -> u16 {
@@ -548,6 +871,45 @@ mod tests {
         let dard = parse_sqldard(&obj).unwrap();
         assert_eq!(dard.num_columns, 0);
         assert!(dard.columns.is_empty());
+    }
+
+    #[test]
+    fn test_parse_standard_big_endian_sqldard() {
+        let mut data = Vec::new();
+        data.push(0x00);
+        data.extend_from_slice(&0i32.to_be_bytes());
+        data.extend_from_slice(b"00000");
+        data.extend_from_slice(b"SQLPROC1");
+        data.push(0xFF);
+        data.push(0xFF);
+        data.extend_from_slice(&2u16.to_be_bytes());
+
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&4u64.to_be_bytes());
+        data.extend_from_slice(&496u16.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.push(0xFF);
+
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&26u64.to_be_bytes());
+        data.extend_from_slice(&392u16.to_be_bytes());
+        data.extend_from_slice(&1208u16.to_be_bytes());
+        data.push(0xFF);
+
+        let mut builder = crate::ddm::DdmBuilder::new(SQLDARD);
+        builder.add_raw(&data);
+        let bytes = builder.build();
+        let (obj, _) = DdmObject::parse(&bytes).unwrap();
+
+        let dard = parse_sqldard(&obj).unwrap();
+        assert_eq!(dard.num_columns, 2);
+        assert_eq!(dard.columns[0].db2_type, Db2Type::Integer);
+        assert_eq!(dard.columns[0].length, 4);
+        assert_eq!(dard.columns[0].byte_order, ByteOrder::BigEndian);
+        assert_eq!(dard.columns[1].db2_type, Db2Type::Timestamp);
+        assert_eq!(dard.columns[1].length, 26);
     }
 
     #[test]

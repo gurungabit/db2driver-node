@@ -5,6 +5,13 @@ use crate::types::{self, Db2Type, Db2Value};
 use crate::{ProtoError, Result};
 use std::env;
 
+/// Byte order used for fixed-width numeric values in row data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByteOrder {
+    BigEndian,
+    LittleEndian,
+}
+
 /// Describes a single column from the FD:OCA descriptor.
 #[derive(Debug, Clone)]
 pub struct ColumnDescriptor {
@@ -16,6 +23,7 @@ pub struct ColumnDescriptor {
     pub nullable: bool,
     pub ccsid: u16,
     pub db2_type: Db2Type,
+    pub byte_order: ByteOrder,
 }
 
 /// FD:OCA triplet types used in QRYDSC.
@@ -135,6 +143,7 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
             nullable,
             ccsid,
             db2_type,
+            byte_order: ByteOrder::LittleEndian,
         });
 
         offset += 3;
@@ -198,6 +207,7 @@ fn parse_sda_triplet(data: &[u8], col_index: usize) -> Option<ColumnDescriptor> 
         nullable,
         ccsid,
         db2_type,
+        byte_order: ByteOrder::LittleEndian,
     })
 }
 
@@ -384,7 +394,11 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let val = i16::from_le_bytes([data[0], data[1]]);
+            let bytes = [data[0], data[1]];
+            let val = match col.byte_order {
+                ByteOrder::BigEndian => i16::from_be_bytes(bytes),
+                ByteOrder::LittleEndian => i16::from_le_bytes(bytes),
+            };
             Ok((Db2Value::SmallInt(val), 2))
         }
         Db2Type::Integer => {
@@ -394,7 +408,11 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let val = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let bytes = [data[0], data[1], data[2], data[3]];
+            let val = match col.byte_order {
+                ByteOrder::BigEndian => i32::from_be_bytes(bytes),
+                ByteOrder::LittleEndian => i32::from_le_bytes(bytes),
+            };
             Ok((Db2Value::Integer(val), 4))
         }
         Db2Type::BigInt => {
@@ -404,9 +422,13 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let val = i64::from_le_bytes([
+            let bytes = [
                 data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-            ]);
+            ];
+            let val = match col.byte_order {
+                ByteOrder::BigEndian => i64::from_be_bytes(bytes),
+                ByteOrder::LittleEndian => i64::from_le_bytes(bytes),
+            };
             Ok((Db2Value::BigInt(val), 8))
         }
         Db2Type::Real => {
@@ -416,7 +438,11 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let val = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let bytes = [data[0], data[1], data[2], data[3]];
+            let val = match col.byte_order {
+                ByteOrder::BigEndian => f32::from_be_bytes(bytes),
+                ByteOrder::LittleEndian => f32::from_le_bytes(bytes),
+            };
             Ok((Db2Value::Real(val), 4))
         }
         Db2Type::Double => {
@@ -426,9 +452,13 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
                     actual: data.len(),
                 });
             }
-            let val = f64::from_le_bytes([
+            let bytes = [
                 data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-            ]);
+            ];
+            let val = match col.byte_order {
+                ByteOrder::BigEndian => f64::from_be_bytes(bytes),
+                ByteOrder::LittleEndian => f64::from_le_bytes(bytes),
+            };
             Ok((Db2Value::Double(val), 8))
         }
         Db2Type::DecFloat(digits) => {
@@ -658,6 +688,7 @@ pub fn parse_qrydta(data: &[u8], num_columns: usize) -> Result<Vec<Vec<Db2Value>
             nullable: true,
             ccsid: 1208,
             db2_type: Db2Type::VarChar(32672),
+            byte_order: ByteOrder::LittleEndian,
         })
         .collect();
     decode_rows(data, &columns)
@@ -679,6 +710,7 @@ mod tests {
                 nullable: false,
                 ccsid: 0,
                 db2_type: Db2Type::Integer,
+                byte_order: ByteOrder::LittleEndian,
             },
             ColumnDescriptor {
                 column_index: 1,
@@ -689,6 +721,7 @@ mod tests {
                 nullable: true,
                 ccsid: 1208,
                 db2_type: Db2Type::VarChar(100),
+                byte_order: ByteOrder::LittleEndian,
             },
         ];
 
@@ -716,6 +749,7 @@ mod tests {
             nullable: true,
             ccsid: 0,
             db2_type: Db2Type::Integer,
+            byte_order: ByteOrder::LittleEndian,
         }];
 
         let row_data = vec![0xFF]; // null indicator
@@ -734,9 +768,30 @@ mod tests {
             nullable: false,
             ccsid: 0,
             db2_type: Db2Type::Integer,
+            byte_order: ByteOrder::LittleEndian,
         }];
 
         let row_data = vec![0xFF, 0x00, 0x01, 0x00, 0x00, 0x00];
+        let (values, consumed) = decode_row(&row_data, &cols).unwrap();
+        assert_eq!(consumed, row_data.len());
+        assert_eq!(values[0], Db2Value::Integer(1));
+    }
+
+    #[test]
+    fn test_decode_big_endian_integer() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x02,
+            length: 4,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 0,
+            db2_type: Db2Type::Integer,
+            byte_order: ByteOrder::BigEndian,
+        }];
+
+        let row_data = vec![0x00, 0x00, 0x00, 0x01];
         let (values, consumed) = decode_row(&row_data, &cols).unwrap();
         assert_eq!(consumed, row_data.len());
         assert_eq!(values[0], Db2Value::Integer(1));
