@@ -120,8 +120,10 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
     let mut offset = 1;
     while offset + 2 < data.len() {
         let drda_type = data[offset];
-        let length = u16::from_be_bytes([data[offset + 1], data[offset + 2]]);
-        let (db2_type, nullable) = Db2Type::from_drda_type(drda_type, length, 0, 0);
+        let attr1 = data[offset + 1];
+        let attr2 = data[offset + 2];
+        let (db2_type, nullable, length, precision, scale) =
+            compact_gda_descriptor_type(drda_type, attr1, attr2);
         let ccsid = match db2_type {
             Db2Type::Char(_)
             | Db2Type::VarChar(_)
@@ -138,8 +140,8 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
             column_index: start_index + descriptors.len(),
             drda_type,
             length,
-            precision: 0,
-            scale: 0,
+            precision,
+            scale,
             nullable,
             ccsid,
             db2_type,
@@ -150,6 +152,32 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
     }
 
     descriptors
+}
+
+fn compact_gda_descriptor_type(
+    drda_type: u8,
+    attr1: u8,
+    attr2: u8,
+) -> (Db2Type, bool, u16, u8, u8) {
+    let nullable = (drda_type & 0x01) != 0;
+    let base = drda_type & 0xFE;
+
+    if base == 0x0E {
+        let precision = attr1;
+        let scale = attr2;
+        let length = ((precision as usize + 2) / 2) as u16;
+        return (
+            Db2Type::Decimal { precision, scale },
+            nullable,
+            length,
+            precision,
+            scale,
+        );
+    }
+
+    let length = u16::from_be_bytes([attr1, attr2]);
+    let (db2_type, nullable) = Db2Type::from_drda_type(drda_type, length, 0, 0);
+    (db2_type, nullable, length, 0, 0)
 }
 
 /// Parse a single SDA (Structured Data Area) triplet's data portion.
@@ -889,6 +917,30 @@ mod tests {
         let (values, consumed) = decode_row(&row_data, &descriptors).unwrap();
         assert_eq!(consumed, row_data.len());
         assert_eq!(values[0], Db2Value::Integer(1));
+    }
+
+    #[test]
+    fn test_parse_compact_qrydsc_decimal_uses_precision_scale_bytes() {
+        let qrydsc = [0x09, 0x76, 0xD0, 0x0E, 0x0B, 0x00, 0x3E, 0x00, 0x14];
+        let descriptors = parse_qrydsc(&qrydsc).unwrap();
+        assert_eq!(descriptors.len(), 2);
+        assert_eq!(
+            descriptors[0].db2_type,
+            Db2Type::Decimal {
+                precision: 11,
+                scale: 0
+            }
+        );
+        assert_eq!(descriptors[0].length, 6);
+        assert_eq!(descriptors[0].precision, 11);
+        assert_eq!(descriptors[0].scale, 0);
+        assert_eq!(descriptors[1].db2_type, Db2Type::VarGraphic(20));
+
+        let row_data = b"\xFF\x00\x00\x00\x00\x00\x00\x3C\x00\x0E112042F8730CA1";
+        let (values, consumed) = decode_row(row_data, &descriptors).unwrap();
+        assert_eq!(consumed, row_data.len());
+        assert_eq!(values[0], Db2Value::Decimal("3".to_string()));
+        assert_eq!(values[1], Db2Value::VarChar("112042F8730CA1".to_string()));
     }
 
     #[test]
