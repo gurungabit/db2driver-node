@@ -1004,17 +1004,19 @@ impl ClientInner {
             }
         }
 
+        let active_descriptors = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
         let columns = if !column_info.is_empty() {
-            column_info.to_vec()
-        } else if let Some(descriptors) =
-            sqldard_descriptors.as_ref().or(qrydsc_descriptors.as_ref())
-        {
+            if let Some(descriptors) = active_descriptors.filter(|d| d.len() == column_info.len()) {
+                column_info_with_descriptor_types(column_info, descriptors)
+            } else {
+                column_info.to_vec()
+            }
+        } else if let Some(descriptors) = active_descriptors {
             column_info_from_descriptors(descriptors)
         } else {
             Vec::new()
         };
 
-        let active_descriptors = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
         diagnostics.push(format!(
             "decode_final rows={} columns={} pending_tail={} qrydsc_desc={} sqldard_desc={} active_desc={}",
             rows.len(),
@@ -2772,6 +2774,31 @@ fn column_info_from_descriptors(
                 Some(descriptor.scale as u16)
             } else {
                 None
+            },
+        })
+        .collect()
+}
+
+fn column_info_with_descriptor_types(
+    column_info: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> Vec<ColumnInfo> {
+    column_info
+        .iter()
+        .zip(descriptors.iter())
+        .map(|(column, descriptor)| ColumnInfo {
+            name: column.name.clone(),
+            type_name: format!("{:?}", descriptor.db2_type),
+            nullable: descriptor.nullable,
+            precision: if descriptor.precision > 0 {
+                Some(descriptor.precision as u16)
+            } else {
+                column.precision
+            },
+            scale: if descriptor.scale > 0 {
+                Some(descriptor.scale as u16)
+            } else {
+                column.scale
             },
         })
         .collect()

@@ -83,6 +83,10 @@ pub fn parse_sqldard_data(data: &[u8]) -> Result<SqlDard> {
         }
     }
 
+    if let Some(scanned) = scan_standard_sqldagroups(data) {
+        return Ok(scanned);
+    }
+
     if data.is_empty() {
         return Err(ProtoError::Other("empty SQLDARD data".into()));
     }
@@ -235,6 +239,63 @@ fn parse_compact_sqldard_data(data: &[u8]) -> Result<Option<SqlDard>> {
         num_columns: columns.len() as u16,
         columns,
     }))
+}
+
+fn scan_standard_sqldagroups(data: &[u8]) -> Option<SqlDard> {
+    let mut best_columns = Vec::new();
+    let mut best_score = 0usize;
+
+    for byte_order in [ByteOrder::BigEndian, ByteOrder::LittleEndian] {
+        for start in 0..data.len().saturating_sub(17) {
+            let mut offset = start;
+            let mut columns = Vec::new();
+
+            for index in 0..512 {
+                let Ok((column, next_offset)) =
+                    parse_standard_column_descriptor(data, offset, index, byte_order)
+                else {
+                    break;
+                };
+                if next_offset <= offset || next_offset > data.len() {
+                    break;
+                }
+
+                columns.push(column);
+                offset = next_offset;
+            }
+
+            let named_count = columns
+                .iter()
+                .filter(|column| !is_generated_column_name(&column.name))
+                .count();
+            if named_count == 0 || columns.len() < 2 {
+                continue;
+            }
+
+            let score = named_count * 1024 + columns.len();
+            if score > best_score {
+                best_score = score;
+                best_columns = columns;
+            }
+        }
+    }
+
+    if best_columns.is_empty() {
+        return None;
+    }
+
+    Some(SqlDard {
+        sqlcard: parse_sqlcard_data(data).unwrap_or_else(|_| SqlCard::success()),
+        num_columns: best_columns.len() as u16,
+        columns: best_columns,
+    })
+}
+
+fn is_generated_column_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("COL") else {
+        return false;
+    };
+    !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn find_compact_descriptor_table(data: &[u8]) -> Option<(usize, usize)> {
@@ -924,5 +985,43 @@ mod tests {
             0xFF,
         ];
         assert_eq!(extract_column_name(&descriptor), Some("NAME".to_string()));
+    }
+
+    #[test]
+    fn test_scan_standard_sqldagroups_finds_padded_descriptors() {
+        let mut data = vec![0; 96];
+        data.extend_from_slice(&standard_descriptor("POLICY_ID", 0, 0, 6, 484, 0));
+        data.extend_from_slice(&standard_descriptor("POLICY_NUM", 0, 0, 20, 464, 1200));
+
+        let dard = parse_sqldard_data(&data).unwrap();
+        assert_eq!(dard.num_columns, 2);
+        assert_eq!(dard.columns[0].name, "POLICY_ID");
+        assert_eq!(dard.columns[1].name, "POLICY_NUM");
+    }
+
+    fn standard_descriptor(
+        name: &str,
+        precision: u16,
+        scale: u16,
+        length: u64,
+        sql_type: u16,
+        ccsid: u16,
+    ) -> Vec<u8> {
+        let mut descriptor = Vec::new();
+        descriptor.extend_from_slice(&precision.to_be_bytes());
+        descriptor.extend_from_slice(&scale.to_be_bytes());
+        descriptor.extend_from_slice(&length.to_be_bytes());
+        descriptor.extend_from_slice(&sql_type.to_be_bytes());
+        descriptor.extend_from_slice(&ccsid.to_be_bytes());
+        descriptor.push(0x00);
+        descriptor.extend_from_slice(&0u16.to_be_bytes());
+        descriptor.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        descriptor.extend_from_slice(name.as_bytes());
+        for _ in 0..5 {
+            descriptor.extend_from_slice(&0u16.to_be_bytes());
+        }
+        descriptor.push(0xFF);
+        descriptor.push(0xFF);
+        descriptor
     }
 }
