@@ -531,11 +531,14 @@ impl ClientInner {
                 {
                     if let Ok(metadata) = Box::pin(self.execute_query(&metadata_sql, params)).await
                     {
-                        if let Some(rewritten_sql) =
-                            rewrite_zos_select_star_lobs(sql, current_schema.as_deref(), &metadata)
+                        if let Some(result) = Box::pin(self.execute_zos_select_star_lobs_chunked(
+                            sql,
+                            current_schema.as_deref(),
+                            &metadata,
+                        ))
+                        .await?
                         {
-                            ensure_sqlstt_sql_len(&rewritten_sql)?;
-                            return Box::pin(self.execute_query(&rewritten_sql, params)).await;
+                            return Ok(result);
                         }
                     }
                 }
@@ -671,6 +674,102 @@ impl ClientInner {
             self.execute_with_params(&pkgnamcsn, params, &input_descriptors)
                 .await
         }
+    }
+
+    async fn execute_zos_select_star_lobs_chunked(
+        &mut self,
+        sql: &str,
+        current_schema: Option<&str>,
+        metadata: &QueryResult,
+    ) -> Result<Option<QueryResult>, Error> {
+        let Some(base_sql) = build_zos_select_star_lob_base_query(sql, current_schema, metadata)
+        else {
+            return Ok(None);
+        };
+        ensure_sqlstt_sql_len(&base_sql)?;
+
+        let parsed = parse_simple_select_star(sql, current_schema)
+            .ok_or_else(|| Error::Protocol("failed to parse simple SELECT-star query".into()))?;
+        let catalog_columns = catalog_columns_from_query_result(metadata);
+        let base_result = Box::pin(self.execute_query(&base_sql, &[])).await?;
+
+        let output_columns = zos_lob_output_columns(
+            &catalog_columns,
+            &base_result.columns,
+            base_result.row_count,
+        );
+        let output_names = output_columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let mut output_rows = Vec::with_capacity(base_result.rows.len());
+
+        for (row_index, base_row) in base_result.rows.iter().enumerate() {
+            let mut values = Vec::with_capacity(catalog_columns.len());
+            let base_values = base_row.values();
+            for (col_index, column) in catalog_columns.iter().enumerate() {
+                let Some(base_value) = base_values.get(col_index) else {
+                    return Err(Error::Protocol(format!(
+                        "z/OS LOB base query returned {} value(s), expected at least {}",
+                        base_values.len(),
+                        col_index + 1
+                    )));
+                };
+
+                if column.is_clob() || column.is_dbclob() {
+                    let Some(lob_len) = db2_value_to_usize(base_value)? else {
+                        values.push(db2_proto::types::Db2Value::Null);
+                        continue;
+                    };
+                    let text = self
+                        .fetch_zos_lob_chunks(&parsed, column, row_index + 1, lob_len)
+                        .await?;
+                    values.push(db2_proto::types::Db2Value::Clob(text));
+                } else {
+                    values.push(base_value.clone());
+                }
+            }
+            output_rows.push(Row::new(output_names.clone(), values));
+        }
+
+        Ok(Some(QueryResult::with_rows_and_diagnostics(
+            output_rows,
+            output_columns,
+            base_result.diagnostics,
+        )))
+    }
+
+    async fn fetch_zos_lob_chunks(
+        &mut self,
+        parsed: &SimpleSelectStar,
+        column: &CatalogColumn,
+        row_number: usize,
+        lob_len: usize,
+    ) -> Result<String, Error> {
+        let mut text = String::new();
+        let mut start = 1usize;
+        let chunk_limit = if column.is_dbclob() {
+            ZOS_DBCLOB_CHUNK_LIMIT
+        } else {
+            ZOS_CLOB_CHUNK_LIMIT
+        };
+
+        while start <= lob_len {
+            let chunk_len = chunk_limit.min(lob_len - start + 1);
+            let chunk_sql = build_zos_lob_chunk_query(parsed, column, row_number, start, chunk_len);
+            ensure_sqlstt_sql_len(&chunk_sql)?;
+            let chunk_result = Box::pin(self.execute_query(&chunk_sql, &[])).await?;
+            let chunk = chunk_result
+                .rows
+                .first()
+                .and_then(|row| row.values().first())
+                .and_then(db2_value_to_string)
+                .unwrap_or_default();
+            text.push_str(&chunk);
+            start += chunk_len;
+        }
+
+        Ok(text)
     }
 
     /// Execute a DML statement with parameters.
@@ -1633,6 +1732,8 @@ impl Client {
 const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
+const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
+const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SimpleSelectStar {
@@ -1646,6 +1747,28 @@ struct SimpleSelectStar {
 struct CatalogColumn {
     name: String,
     coltype: String,
+}
+
+impl CatalogColumn {
+    fn normalized_coltype(&self) -> String {
+        self.coltype.trim().to_ascii_uppercase()
+    }
+
+    fn is_clob(&self) -> bool {
+        self.normalized_coltype() == "CLOB"
+    }
+
+    fn is_dbclob(&self) -> bool {
+        self.normalized_coltype() == "DBCLOB"
+    }
+
+    fn is_lob(&self) -> bool {
+        self.is_clob() || self.is_dbclob()
+    }
+
+    fn is_rowid(&self) -> bool {
+        self.normalized_coltype() == "ROWID"
+    }
 }
 
 pub(crate) fn ensure_sqlstt_sql_len(sql: &str) -> Result<(), Error> {
@@ -1682,44 +1805,34 @@ fn build_zos_select_star_metadata_query(sql: &str, current_schema: Option<&str>)
     ))
 }
 
-fn rewrite_zos_select_star_lobs(
+fn build_zos_select_star_lob_base_query(
     sql: &str,
     current_schema: Option<&str>,
     metadata: &QueryResult,
 ) -> Option<String> {
     let parsed = parse_simple_select_star(sql, current_schema)?;
     let columns = catalog_columns_from_query_result(metadata);
-    if columns.is_empty() {
+    if columns.is_empty() || !columns.iter().any(CatalogColumn::is_lob) {
         return None;
     }
 
-    let mut has_lob = false;
     let projection = columns
         .iter()
-        .map(|column| {
+        .enumerate()
+        .map(|(index, column)| {
             let ident = quote_sql_identifier(&column.name);
-            match column.coltype.trim().to_ascii_uppercase().as_str() {
-                "CLOB" => {
-                    has_lob = true;
-                    format!(
-                        "CAST(SUBSTR({ident}, 1, {ZOS_CLOB_INLINE_LIMIT}) AS VARCHAR({ZOS_CLOB_INLINE_LIMIT})) AS {ident}"
-                    )
-                }
-                "DBCLOB" => {
-                    has_lob = true;
-                    format!(
-                        "CAST(SUBSTR({ident}, 1, {ZOS_DBCLOB_INLINE_LIMIT}) AS VARGRAPHIC({ZOS_DBCLOB_INLINE_LIMIT})) AS {ident}"
-                    )
-                }
-                "ROWID" => format!("HEX({ident}) AS {ident}"),
-                _ => ident,
+            if column.is_lob() {
+                format!(
+                    "LENGTH({ident}) AS {}",
+                    quote_sql_identifier(&lob_len_alias(index))
+                )
+            } else if column.is_rowid() {
+                format!("HEX({ident}) AS {ident}")
+            } else {
+                ident
             }
         })
         .collect::<Vec<_>>();
-
-    if !has_lob {
-        return None;
-    }
 
     let suffix = parsed.suffix.trim();
     if suffix.is_empty() {
@@ -1735,6 +1848,100 @@ fn rewrite_zos_select_star_lobs(
             parsed.table_ref,
             suffix
         ))
+    }
+}
+
+fn build_zos_lob_chunk_query(
+    parsed: &SimpleSelectStar,
+    column: &CatalogColumn,
+    row_number: usize,
+    start: usize,
+    len: usize,
+) -> String {
+    let ident = quote_sql_identifier(&column.name);
+    let cast_type = if column.is_dbclob() {
+        format!("VARGRAPHIC({len})")
+    } else {
+        format!("VARCHAR({len})")
+    };
+    let source_sql = if parsed.suffix.trim().is_empty() {
+        format!("SELECT {ident} FROM {}", parsed.table_ref)
+    } else {
+        format!("SELECT {ident} FROM {} {}", parsed.table_ref, parsed.suffix)
+    };
+    let offset = row_number.saturating_sub(1);
+    if offset == 0 {
+        format!(
+            "SELECT CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS \"DB2NODE_LOB_CHUNK\" FROM ({source_sql}) AS DB2NODE_LOB_SRC FETCH FIRST 1 ROW ONLY"
+        )
+    } else {
+        format!(
+            "SELECT CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS \"DB2NODE_LOB_CHUNK\" FROM ({source_sql}) AS DB2NODE_LOB_SRC OFFSET {offset} ROWS FETCH FIRST 1 ROW ONLY"
+        )
+    }
+}
+
+fn lob_len_alias(index: usize) -> String {
+    format!("DB2NODE_LOB_LEN_{}", index + 1)
+}
+
+fn zos_lob_output_columns(
+    catalog_columns: &[CatalogColumn],
+    base_columns: &[ColumnInfo],
+    _row_count: i64,
+) -> Vec<ColumnInfo> {
+    catalog_columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let mut info = base_columns
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| ColumnInfo::new(column.name.clone(), "Unknown".into(), true));
+            info.name = column.name.clone();
+            if column.is_clob() {
+                info.type_name = "Clob".into();
+                info.nullable = true;
+            } else if column.is_dbclob() {
+                info.type_name = "DbClob".into();
+                info.nullable = true;
+            }
+            info
+        })
+        .collect()
+}
+
+fn db2_value_to_usize(value: &db2_proto::types::Db2Value) -> Result<Option<usize>, Error> {
+    match value {
+        db2_proto::types::Db2Value::Null => Ok(None),
+        db2_proto::types::Db2Value::SmallInt(v) => Ok((*v >= 0).then_some(*v as usize)),
+        db2_proto::types::Db2Value::Integer(v) => Ok((*v >= 0).then_some(*v as usize)),
+        db2_proto::types::Db2Value::BigInt(v) => Ok((*v >= 0).then_some(*v as usize)),
+        db2_proto::types::Db2Value::Decimal(v) => v
+            .trim()
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| Error::Protocol(format!("invalid z/OS LOB length value: {v}"))),
+        _ => Err(Error::Protocol(format!(
+            "unexpected z/OS LOB length value: {:?}",
+            value
+        ))),
+    }
+}
+
+fn db2_value_to_string(value: &db2_proto::types::Db2Value) -> Option<String> {
+    match value {
+        db2_proto::types::Db2Value::Char(v)
+        | db2_proto::types::Db2Value::VarChar(v)
+        | db2_proto::types::Db2Value::Clob(v)
+        | db2_proto::types::Db2Value::Date(v)
+        | db2_proto::types::Db2Value::Time(v)
+        | db2_proto::types::Db2Value::Timestamp(v)
+        | db2_proto::types::Db2Value::Decimal(v)
+        | db2_proto::types::Db2Value::RowId(v)
+        | db2_proto::types::Db2Value::Xml(v) => Some(v.clone()),
+        db2_proto::types::Db2Value::Null => Some(String::new()),
+        _ => None,
     }
 }
 
@@ -3261,7 +3468,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_zos_select_star_lobs_uses_catalog_metadata() {
+    fn build_zos_select_star_lob_base_query_uses_catalog_metadata() {
         let metadata = QueryResult::with_rows(
             vec![
                 Row::new(
@@ -3289,7 +3496,7 @@ mod tests {
             Vec::new(),
         );
 
-        let rewritten = rewrite_zos_select_star_lobs(
+        let rewritten = build_zos_select_star_lob_base_query(
             "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY",
             None,
             &metadata,
@@ -3297,12 +3504,28 @@ mod tests {
         .unwrap();
 
         assert!(rewritten.contains("\"INSP_RPT_ID\""));
-        assert!(rewritten.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 32704) AS VARCHAR(32704)) AS \"INSP_RPT_DETL_DOC\""
-        ));
+        assert!(rewritten.contains("LENGTH(\"INSP_RPT_DETL_DOC\") AS \"DB2NODE_LOB_LEN_2\""));
         assert!(rewritten
             .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
+    }
+
+    #[test]
+    fn build_zos_lob_chunk_query_fetches_one_small_piece() {
+        let parsed = parse_simple_select_star(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY",
+            None,
+        )
+        .unwrap();
+        let column = CatalogColumn {
+            name: "INSP_RPT_DETL_DOC".to_string(),
+            coltype: "CLOB".to_string(),
+        };
+
+        let sql = build_zos_lob_chunk_query(&parsed, &column, 2, 16001, 16000);
+
+        assert!(sql.contains("CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 16001, 16000) AS VARCHAR(16000))"));
+        assert!(sql.contains("OFFSET 1 ROWS FETCH FIRST 1 ROW ONLY"));
     }
 
     #[test]
