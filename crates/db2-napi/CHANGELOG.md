@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.34](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.34) (2026-05-02)
+
+### Bug Fixes
+
+- include query reply diagnostics in result objects
+
 ## [0.1.7-zos.33](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.33) (2026-05-02)
 
 ### Bug Fixes

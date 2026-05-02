@@ -11,6 +11,8 @@ pub struct QueryResult {
     pub row_count: i64,
     /// Column metadata for the result set.
     pub columns: Vec<ColumnInfo>,
+    /// Wire-level diagnostics, populated for troubleshooting.
+    pub diagnostics: Vec<String>,
 }
 
 impl QueryResult {
@@ -20,6 +22,7 @@ impl QueryResult {
             rows: Vec::new(),
             row_count,
             columns: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -30,6 +33,22 @@ impl QueryResult {
             rows,
             row_count,
             columns,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Create a QueryResult with rows, column info, and diagnostics.
+    pub fn with_rows_and_diagnostics(
+        rows: Vec<Row>,
+        columns: Vec<ColumnInfo>,
+        diagnostics: Vec<String>,
+    ) -> Self {
+        let row_count = rows.len() as i64;
+        QueryResult {
+            rows,
+            row_count,
+            columns,
+            diagnostics,
         }
     }
 }

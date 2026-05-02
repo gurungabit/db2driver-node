@@ -28,6 +28,7 @@ export interface JsQueryResult {
   rows: Array<any>
   rowCount: number
   columns: Array<JsColumnInfo>
+  diagnostics: Array<string>
 }
 export interface JsColumnInfo {
   name: string

@@ -704,6 +704,7 @@ impl ClientInner {
                 rows: Vec::new(),
                 columns: Vec::new(),
                 row_count: 0,
+                diagnostics: Vec::new(),
             });
         }
 
@@ -779,6 +780,7 @@ impl ClientInner {
             rows: Vec::new(),
             columns: Vec::new(),
             row_count: total_row_count,
+            diagnostics: Vec::new(),
         })
     }
 
@@ -870,6 +872,7 @@ impl ClientInner {
         let mut query_instance_id: Option<Vec<u8>> = None;
         let mut pending_row_bytes = Vec::new();
         let mut end_of_query = false;
+        let mut diagnostics = frame_diagnostics(frames);
 
         process_query_frames(
             frames,
@@ -902,6 +905,7 @@ impl ClientInner {
             if more_frames.is_empty() {
                 break;
             }
+            diagnostics.extend(frame_diagnostics(&more_frames));
 
             if debug_hex_enabled() {
                 eprintln!(
@@ -939,6 +943,7 @@ impl ClientInner {
                 self.send_bytes(&send_buf).await?;
 
                 let more_frames = self.read_reply_frames().await?;
+                diagnostics.extend(frame_diagnostics(&more_frames));
                 process_query_frames(
                     &more_frames,
                     column_info,
@@ -1014,7 +1019,11 @@ impl ClientInner {
             );
         }
 
-        Ok(QueryResult::with_rows(rows, columns))
+        Ok(QueryResult::with_rows_and_diagnostics(
+            rows,
+            columns,
+            diagnostics,
+        ))
     }
 
     /// Process reply frames from an execute (non-query) statement.
@@ -1081,6 +1090,7 @@ impl ClientInner {
             rows: Vec::new(),
             row_count,
             columns,
+            diagnostics: frame_diagnostics(frames),
         })
     }
 
@@ -2465,6 +2475,72 @@ fn decode_pending_query_data(
     *pending_row_bytes = buffered;
 
     Ok(())
+}
+
+fn frame_diagnostics(frames: &[DssFrame]) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    for (frame_index, frame) in frames.iter().enumerate() {
+        match ClientInner::parse_ddm_objects(&frame.payload) {
+            Ok(objects) => {
+                if objects.is_empty() {
+                    diagnostics.push(format!(
+                        "frame#{frame_index} type={:?} corr={} payload_len={} objects=0",
+                        frame.header.dss_type,
+                        frame.header.correlation_id,
+                        frame.payload.len()
+                    ));
+                    continue;
+                }
+
+                for obj in objects {
+                    let preview = if matches!(
+                        obj.code_point,
+                        codepoints::SQLDARD | codepoints::QRYDSC | codepoints::QRYDTA
+                    ) {
+                        format!(" preview={}", format_hex_preview(&obj.data, 96))
+                    } else {
+                        String::new()
+                    };
+                    diagnostics.push(format!(
+                        "frame#{frame_index} type={:?} corr={} cp={} len={}{}",
+                        frame.header.dss_type,
+                        frame.header.correlation_id,
+                        ddm_codepoint_name(obj.code_point),
+                        obj.data.len(),
+                        preview
+                    ));
+                }
+            }
+            Err(err) => diagnostics.push(format!(
+                "frame#{frame_index} type={:?} corr={} payload_len={} parse_error={}",
+                frame.header.dss_type,
+                frame.header.correlation_id,
+                frame.payload.len(),
+                err
+            )),
+        }
+    }
+    diagnostics
+}
+
+fn ddm_codepoint_name(code_point: u16) -> String {
+    let name = match code_point {
+        codepoints::SQLCARD => "SQLCARD",
+        codepoints::SQLDARD => "SQLDARD",
+        codepoints::OPNQRYRM => "OPNQRYRM",
+        codepoints::QRYDSC => "QRYDSC",
+        codepoints::QRYDTA => "QRYDTA",
+        codepoints::ENDQRYRM => "ENDQRYRM",
+        codepoints::RDBUPDRM => "RDBUPDRM",
+        codepoints::SQLERRRM => "SQLERRRM",
+        codepoints::SYNTAXRM => "SYNTAXRM",
+        codepoints::PRCCNVRM => "PRCCNVRM",
+        codepoints::VALNSPRM => "VALNSPRM",
+        codepoints::CMDNSPRM => "CMDNSPRM",
+        codepoints::PRMNSPRM => "PRMNSPRM",
+        _ => "UNKNOWN",
+    };
+    format!("{name}(0x{code_point:04X})")
 }
 
 pub(crate) fn protocol_reply_error(obj: &DdmObject, context: &str) -> Option<Error> {

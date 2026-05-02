@@ -34,6 +34,7 @@ pub struct JsQueryResult {
     pub rows: Vec<serde_json::Value>,
     pub row_count: i64,
     pub columns: Vec<JsColumnInfo>,
+    pub diagnostics: Vec<String>,
 }
 
 #[napi(object)]

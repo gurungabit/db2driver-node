@@ -228,6 +228,7 @@ pub fn query_result_to_js(result: db2_client::types::QueryResult) -> JsQueryResu
         rows,
         row_count: result.row_count,
         columns,
+        diagnostics: result.diagnostics,
     }
 }
 
