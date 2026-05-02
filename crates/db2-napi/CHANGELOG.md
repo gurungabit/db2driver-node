@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [0.1.7-zos.37](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.37) (2026-05-02)
+
+### Bug Fixes
+
+- decode compact z/OS QRYDSC numeric row values as big-endian
+
 ## [0.1.7-zos.36](https://github.com/gurungabit/db2-node/releases/tag/zos-secmec7-0.1.7-zos.36) (2026-05-02)
 
 ### Bug Fixes

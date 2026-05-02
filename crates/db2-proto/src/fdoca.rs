@@ -143,7 +143,7 @@ fn parse_compact_gda_triplet(data: &[u8], start_index: usize) -> Vec<ColumnDescr
             nullable,
             ccsid,
             db2_type,
-            byte_order: ByteOrder::LittleEndian,
+            byte_order: ByteOrder::BigEndian,
         });
 
         offset += 3;
@@ -793,6 +793,22 @@ mod tests {
 
         let row_data = vec![0x00, 0x00, 0x00, 0x01];
         let (values, consumed) = decode_row(&row_data, &cols).unwrap();
+        assert_eq!(consumed, row_data.len());
+        assert_eq!(values[0], Db2Value::Integer(1));
+    }
+
+    #[test]
+    fn test_parse_compact_qrydsc_uses_big_endian_row_values() {
+        let qrydsc = [
+            0x06, 0x76, 0xD0, 0x02, 0x00, 0x04, 0x09, 0x71, 0xE0, 0x54, 0x00, 0x01, 0xD0, 0x00,
+            0x01, 0x06, 0x71, 0xF0, 0xE0, 0x00, 0x00,
+        ];
+        let descriptors = parse_qrydsc(&qrydsc).unwrap();
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].byte_order, ByteOrder::BigEndian);
+
+        let row_data = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let (values, consumed) = decode_row(&row_data, &descriptors).unwrap();
         assert_eq!(consumed, row_data.len());
         assert_eq!(values[0], Db2Value::Integer(1));
     }
