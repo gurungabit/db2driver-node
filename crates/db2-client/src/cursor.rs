@@ -92,6 +92,13 @@ impl Cursor {
         let mut writer = DssWriter::new(corr_id);
         writer.write_request(&cntqry_data, false);
         let send_buf = writer.finish();
+        if has_lobs {
+            self.last_fetch_diagnostics.push(format!(
+                "cntqry_send bytes={} preview={}",
+                send_buf.len(),
+                format_hex_preview(&send_buf, 160)
+            ));
+        }
         if debug_hex_enabled() && self.fetch_calls <= 5 {
             eprintln!(
                 "[db2-wire] sending CNTQRY corr={} section={} fetch_size={} has_lobs={} bytes={} pending_tail={}",

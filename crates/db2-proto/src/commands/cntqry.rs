@@ -36,8 +36,10 @@ pub fn build_cntqry_with_rtnextdta(
 
 /// Build CNTQRY with RDBNAM and optional RTNEXTDTA.
 ///
-/// Db2 for z/OS LOB continuation flows use the full CNTQRY form:
-/// RDBNAM, PKGNAMCSN, QRYBLKSZ, QRYINSID, RTNEXTDTA.
+/// Some DRDA flows allow RDBNAM on CNTQRY, but Db2 for z/OS DDF can
+/// reject it for cursor continuation after ACCRDB has already selected
+/// the database. Prefer `build_cntqry_with_rtnextdta` for z/OS LOB
+/// continuation unless a server explicitly requires RDBNAM.
 pub fn build_cntqry_with_rdbnam_and_rtnextdta(
     rdbnam: &str,
     pkgnamcsn: &[u8],
