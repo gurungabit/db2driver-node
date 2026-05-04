@@ -75,7 +75,7 @@ const { Client } = require('@gurungabit/db2-node')
 | `caCert` | `string` | — | Path to CA certificate PEM file |
 | `connectTimeout` | `number` | `30000` | Connection timeout in ms (covers TCP + TLS handshake) |
 | `queryTimeout` | `number` | `0` | Query execution timeout in ms (0 = no timeout) |
-| `frameDrainTimeout` | `number` | `500` | Time in ms to wait for follow-up DRDA reply frames |
+| `frameDrainTimeout` | `number` | `25` | Time in ms to wait for follow-up DRDA reply frames |
 | `currentSchema` | `string` | — | Default schema for unqualified table names |
 | `typeDefinitionName` | `string` | `'QTDSQLASC'` | Optional DRDA data representation for ACCRDB: `'QTDSQLASC'`, `'QTDSQL370'`, `'QTDSQLX86'`, `'QTDSQL400'`, or `'none'` to omit |
 | `fetchSize` | `number` | `100` | Rows fetched per network round-trip |

@@ -104,7 +104,7 @@ impl Default for Config {
             ssl_config: None,
             connect_timeout: Duration::from_secs(30),
             query_timeout: Duration::from_secs(0),
-            frame_drain_timeout: Duration::from_millis(500),
+            frame_drain_timeout: Duration::from_millis(25),
             fetch_size: 100,
             current_schema: None,
             type_definition_name: None,
