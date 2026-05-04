@@ -1380,6 +1380,7 @@ impl ClientInner {
             if let Some(descriptors) = cursor_descriptors {
                 let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
                 if self.server_info.as_ref().map_or(false, is_db2_zos_server)
+                    && self.zos_lob_internal_depth == 0
                     && !use_native_zos_lob_strategy()
                     && descriptors_need_zos_lob_materialization(&cursor_column_info, &descriptors)
                 {
@@ -2622,6 +2623,9 @@ fn column_info_has_lob_hint(columns: &[ColumnInfo]) -> bool {
     columns.iter().any(|column| {
         let ty = column.type_name.to_ascii_lowercase();
         let name = column.name.to_ascii_lowercase();
+        if name.starts_with("db2node_lob_") {
+            return false;
+        }
         ty.contains("clob")
             || ty.contains("blob")
             || ty.contains("varchar(327")
@@ -4908,6 +4912,20 @@ mod tests {
         assert_eq!(zos_lob_rows_per_batch(&clob_column, 16_000), 12);
         assert_eq!(zos_lob_rows_per_batch(&dbclob_column, 8_000), 12);
         assert_eq!(zos_lob_rows_per_batch(&clob_column, 64_000), 3);
+    }
+
+    #[test]
+    fn column_info_lob_hint_ignores_internal_lob_aliases() {
+        assert!(!column_info_has_lob_hint(&[ColumnInfo::new(
+            "DB2NODE_LOB_CHUNK_1".to_string(),
+            "VarGraphic(16000)".to_string(),
+            false,
+        )]));
+        assert!(column_info_has_lob_hint(&[ColumnInfo::new(
+            "INSP_RPT_DETL_DOC".to_string(),
+            "CLOB".to_string(),
+            true,
+        )]));
     }
 
     #[test]
