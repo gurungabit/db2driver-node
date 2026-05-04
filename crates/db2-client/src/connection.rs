@@ -608,15 +608,18 @@ impl ClientInner {
                 let result = self
                     .process_query_reply(&frames, &column_info, Some(&result_descriptors))
                     .await;
-                return self
-                    .retry_zos_lob_chunking_after_decode_error(
-                        sql,
-                        result,
-                        &column_info,
-                        &result_descriptors,
-                        "direct-decode-error",
-                    )
-                    .await;
+                if force_zos_substr_lob_strategy() {
+                    return self
+                        .retry_zos_lob_chunking_after_decode_error(
+                            sql,
+                            result,
+                            &column_info,
+                            &result_descriptors,
+                            "direct-decode-error",
+                        )
+                        .await;
+                }
+                return result;
             }
 
             let mut writer = DssWriter::new(corr_id);
