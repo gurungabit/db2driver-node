@@ -2359,12 +2359,10 @@ fn append_zos_lob_chunk_rows(
         let Some(row_index) = row_number.checked_sub(1) else {
             continue;
         };
-        if row_index >= output_values.len()
-            || !lob_lengths
-                .get(row_index)
-                .and_then(|lob_len| *lob_len)
-                .is_some_and(|lob_len| start <= lob_len)
-        {
+        let Some(lob_len) = lob_lengths.get(row_index).and_then(|lob_len| *lob_len) else {
+            continue;
+        };
+        if row_index >= output_values.len() || start > lob_len {
             continue;
         }
 
@@ -2377,15 +2375,33 @@ fn append_zos_lob_chunk_rows(
             .get_mut(row_index)
             .and_then(|values| values.get_mut(column_index))
         {
-            Some(db2_proto::types::Db2Value::Clob(text)) => text.push_str(&chunk),
+            Some(db2_proto::types::Db2Value::Clob(text)) => {
+                let remaining = lob_len.saturating_sub(text.chars().count());
+                let chunk = trim_zos_lob_chunk_to_remaining(&chunk, remaining);
+                text.push_str(chunk);
+            }
             Some(value @ db2_proto::types::Db2Value::Null) if !chunk.is_empty() => {
-                *value = db2_proto::types::Db2Value::Clob(chunk);
+                let chunk = trim_zos_lob_chunk_to_remaining(&chunk, lob_len);
+                if !chunk.is_empty() {
+                    *value = db2_proto::types::Db2Value::Clob(chunk.to_string());
+                }
             }
             _ => {}
         }
     }
 
     Ok(())
+}
+
+fn trim_zos_lob_chunk_to_remaining(chunk: &str, remaining_chars: usize) -> &str {
+    if remaining_chars == 0 {
+        return "";
+    }
+
+    match chunk.char_indices().nth(remaining_chars) {
+        Some((byte_index, _)) => &chunk[..byte_index],
+        None => chunk,
+    }
 }
 
 fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) -> String {
@@ -4850,6 +4866,32 @@ mod tests {
         assert_eq!(zos_lob_rows_per_batch(&clob_column, 16_000), 4);
         assert_eq!(zos_lob_rows_per_batch(&dbclob_column, 8_000), 4);
         assert_eq!(zos_lob_rows_per_batch(&clob_column, 64_000), 1);
+    }
+
+    #[test]
+    fn append_zos_lob_chunk_rows_trims_padded_final_chunk() {
+        let chunk_result = QueryResult::with_rows(
+            vec![Row::new(
+                vec!["DB2NODE_RN".to_string(), "DB2NODE_LOB_CHUNK".to_string()],
+                vec![
+                    Db2Value::Integer(1),
+                    Db2Value::VarChar("def     ".to_string()),
+                ],
+            )],
+            Vec::new(),
+        );
+        let mut output_values = vec![vec![Db2Value::Clob("abc".to_string())]];
+
+        append_zos_lob_chunk_rows(&chunk_result, 0, &[Some(6)], &mut output_values, 4).unwrap();
+
+        assert_eq!(output_values[0][0], Db2Value::Clob("abcdef".to_string()));
+    }
+
+    #[test]
+    fn trim_zos_lob_chunk_to_remaining_preserves_utf8_boundary() {
+        assert_eq!(trim_zos_lob_chunk_to_remaining("aébc", 2), "aé");
+        assert_eq!(trim_zos_lob_chunk_to_remaining("abc", 4), "abc");
+        assert_eq!(trim_zos_lob_chunk_to_remaining("abc", 0), "");
     }
 
     #[test]
