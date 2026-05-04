@@ -578,6 +578,29 @@ impl ClientInner {
                     {
                         return Ok(result);
                     }
+
+                    if result_metadata_needs_zos_lob_route(&column_info, &result_descriptors) {
+                        if let Some(metadata_sql) =
+                            build_zos_select_star_metadata_query(sql, current_schema.as_deref())
+                        {
+                            let metadata = self
+                                .execute_zos_lob_internal_query(
+                                    "metadata-after-prepare",
+                                    &metadata_sql,
+                                )
+                                .await?;
+                            if let Some(result) = self
+                                .execute_zos_select_star_lobs_chunked(
+                                    sql,
+                                    current_schema.as_deref(),
+                                    &metadata,
+                                )
+                                .await?
+                            {
+                                return Ok(result);
+                            }
+                        }
+                    }
                 }
 
                 let opnqry_data = {
@@ -598,8 +621,17 @@ impl ClientInner {
                 self.send_bytes(&send_buf).await?;
 
                 let frames = self.read_reply_frames().await?;
-                return self
+                let result = self
                     .process_query_reply(&frames, &column_info, Some(&result_descriptors))
+                    .await;
+                return self
+                    .retry_zos_lob_chunking_after_decode_error(
+                        sql,
+                        result,
+                        &column_info,
+                        &result_descriptors,
+                        "direct-decode-error",
+                    )
                     .await;
             }
 
@@ -784,6 +816,101 @@ impl ClientInner {
             output_rows,
             output_columns,
             diagnostics,
+        )))
+    }
+
+    async fn retry_zos_lob_chunking_after_decode_error(
+        &mut self,
+        sql: &str,
+        result: Result<QueryResult, Error>,
+        column_info: &[ColumnInfo],
+        result_descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+        source: &str,
+    ) -> Result<QueryResult, Error> {
+        let Err(original_error) = result else {
+            return result;
+        };
+
+        if self.zos_lob_internal_depth > 0
+            || !self.server_info.as_ref().map_or(false, is_db2_zos_server)
+            || !should_retry_zos_lob_chunking_after_decode_error(&original_error)
+        {
+            return Err(original_error);
+        }
+
+        let current_schema = self.config.current_schema.clone();
+        let prepare_columns =
+            catalog_columns_from_prepare_metadata(column_info, result_descriptors);
+        if !prepare_columns.is_empty() {
+            match self
+                .execute_zos_select_lobs_chunked_with_catalog(
+                    sql,
+                    current_schema.as_deref(),
+                    &prepare_columns,
+                    source,
+                )
+                .await
+            {
+                Ok(Some(mut retry_result)) => {
+                    retry_result.diagnostics.push(format!(
+                        "zos_lob_retry source={} reason={}",
+                        source, original_error
+                    ));
+                    return Ok(retry_result);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return Err(Error::Protocol(format!(
+                        "z/OS LOB retry failed after direct decoder error: {}; retry_error={}",
+                        original_error, err
+                    )));
+                }
+            }
+        }
+
+        if let Some(metadata_sql) =
+            build_zos_select_star_metadata_query(sql, current_schema.as_deref())
+        {
+            let metadata = self
+                .execute_zos_lob_internal_query("metadata-retry", &metadata_sql)
+                .await?;
+            match self
+                .execute_zos_select_star_lobs_chunked(sql, current_schema.as_deref(), &metadata)
+                .await
+            {
+                Ok(Some(mut retry_result)) => {
+                    retry_result.diagnostics.push(format!(
+                        "zos_lob_retry source=catalog-after-{} reason={}",
+                        source, original_error
+                    ));
+                    return Ok(retry_result);
+                }
+                Ok(None) => {
+                    let catalog_columns = catalog_columns_from_query_result(&metadata);
+                    return Err(Error::Protocol(format!(
+                        "{}; z/OS LOB retry skipped: catalog_columns={} lob_columns={} sql={}",
+                        original_error,
+                        catalog_columns.len(),
+                        catalog_columns
+                            .iter()
+                            .filter(|column| column.is_lob())
+                            .count(),
+                        summarize_sql_for_diagnostics(sql)
+                    )));
+                }
+                Err(err) => {
+                    return Err(Error::Protocol(format!(
+                        "z/OS LOB catalog retry failed after direct decoder error: {}; retry_error={}",
+                        original_error, err
+                    )));
+                }
+            }
+        }
+
+        Err(Error::Protocol(format!(
+            "{}; z/OS LOB retry skipped: query is not a simple single-table SELECT; sql={}",
+            original_error,
+            summarize_sql_for_diagnostics(sql)
         )))
     }
 
@@ -1077,7 +1204,9 @@ impl ClientInner {
         let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
         let mut diagnostics = frame_diagnostics(frames);
-        let prefer_sqldard_descriptors = self.zos_lob_internal_depth > 0;
+        let prefer_sqldard_descriptors = self.zos_lob_internal_depth > 0
+            || (self.server_info.as_ref().map_or(false, is_db2_zos_server)
+                && sqldard_descriptors.is_some());
         if let Some(descriptors) = sqldard_descriptors.as_ref() {
             diagnostics.push(format!(
                 "initial_descriptors count={} {}",
@@ -2078,6 +2207,50 @@ fn db2_value_to_string(value: &db2_proto::types::Db2Value) -> Option<String> {
         db2_proto::types::Db2Value::Null => Some(String::new()),
         _ => None,
     }
+}
+
+fn should_retry_zos_lob_chunking_after_decode_error(error: &Error) -> bool {
+    let Error::Protocol(message) = error else {
+        return false;
+    };
+
+    message.contains("query ended with undecoded row data")
+        && (message.contains("LobBytes")
+            || message.contains("LobChar")
+            || message.contains("drda=0x50")
+            || message.contains("drda=0x51")
+            || message.contains("LOB locator"))
+}
+
+fn result_metadata_needs_zos_lob_route(
+    columns: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> bool {
+    descriptors.iter().any(|descriptor| {
+        is_lob_descriptor(descriptor) || descriptor_has_large_lob_inline_type(descriptor)
+    }) || column_info_has_lob_hint(columns)
+}
+
+fn descriptor_has_large_lob_inline_type(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
+    match descriptor.db2_type {
+        db2_proto::types::Db2Type::VarChar(len)
+        | db2_proto::types::Db2Type::VarGraphic(len)
+        | db2_proto::types::Db2Type::LobBytes(len)
+        | db2_proto::types::Db2Type::LobChar(len) => len & 0x8000 != 0 || len >= 32_704,
+        _ => false,
+    }
+}
+
+fn column_info_has_lob_hint(columns: &[ColumnInfo]) -> bool {
+    columns.iter().any(|column| {
+        let ty = column.type_name.to_ascii_lowercase();
+        let name = column.name.to_ascii_lowercase();
+        ty.contains("clob")
+            || ty.contains("blob")
+            || ty.contains("varchar(327")
+            || ty.contains("vargraphic(327")
+            || name.contains("lob")
+    })
 }
 
 fn catalog_columns_from_query_result(metadata: &QueryResult) -> Vec<CatalogColumn> {
