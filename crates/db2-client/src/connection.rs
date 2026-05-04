@@ -144,6 +144,9 @@ impl ClientInner {
         if self.recv_buf.len() < 6 {
             transport.read_at_least(&mut self.recv_buf, 6).await?;
         }
+        while DssReader::first_complete_frame_len(&self.recv_buf).is_none() {
+            transport.read_bytes(&mut self.recv_buf).await?;
+        }
 
         loop {
             let mut reader = DssReader::new(self.recv_buf.to_vec());
@@ -589,6 +592,8 @@ impl ClientInner {
 
                 let has_zos_lobs =
                     result_metadata_needs_zos_lob_route(&column_info, &result_descriptors);
+                let use_extended_materialized_blocks =
+                    self.zos_lob_internal_depth > 0 && use_zos_sqlstt;
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
@@ -599,6 +604,8 @@ impl ClientInner {
                     if has_zos_lobs && use_native_zos_lob_strategy() {
                         ddm.add_u16(codepoints::MAXBLKEXT, (-1i16) as u16);
                         ddm.add_u32(codepoints::QRYROWSET, native_zos_lob_qryrowset());
+                    } else if use_extended_materialized_blocks {
+                        ddm.add_u16(codepoints::MAXBLKEXT, (-1i16) as u16);
                     }
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()

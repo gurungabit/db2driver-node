@@ -365,6 +365,18 @@ impl DssReader {
         self.complete_frame_len().is_some()
     }
 
+    /// Return the end offset of the first complete DSS frame in `data`.
+    ///
+    /// This is useful for network readers that want to avoid repeatedly
+    /// allocating a full `DssReader` while a large continued DSS frame is still
+    /// arriving from the socket.
+    pub fn first_complete_frame_len(data: &[u8]) -> Option<usize> {
+        if data.len() < DSS_HEADER_LEN {
+            return None;
+        }
+        complete_frame_len_from(data, 0)
+    }
+
     /// Parse the next DSS frame, handling continuation segments.
     /// Returns None if not enough data is available.
     pub fn next_frame(&mut self) -> Result<Option<DssFrame>> {
@@ -486,40 +498,7 @@ impl DssReader {
     }
 
     fn complete_frame_len(&self) -> Option<usize> {
-        if self.remaining() < DSS_HEADER_LEN {
-            return None;
-        }
-
-        let raw_length =
-            u16::from_be_bytes([self.buffer[self.position], self.buffer[self.position + 1]]);
-        if raw_length != 0xFFFF {
-            let len = decode_dss_length(raw_length) as usize;
-            return (self.remaining() >= len).then_some(self.position + len);
-        }
-
-        if self.remaining() < DSS_MAX_SEGMENT_LEN {
-            return None;
-        }
-
-        let mut position = self.position + DSS_MAX_SEGMENT_LEN;
-        loop {
-            if self.buffer.len().saturating_sub(position) < DSS_CONTINUATION_HEADER_LEN {
-                return None;
-            }
-            let continuation_raw =
-                u16::from_be_bytes([self.buffer[position], self.buffer[position + 1]]);
-            let continuation_len = decode_continuation_len(continuation_raw);
-            if continuation_len < DSS_CONTINUATION_HEADER_LEN {
-                return None;
-            }
-            if self.buffer.len().saturating_sub(position) < continuation_len {
-                return None;
-            }
-            position += continuation_len;
-            if !is_full_continuation_len(continuation_raw) {
-                return Some(position);
-            }
-        }
+        complete_frame_len_from(&self.buffer, self.position)
     }
 
     /// Parse all available frames.
@@ -537,6 +516,41 @@ impl DssReader {
             Vec::new()
         } else {
             self.buffer[self.position..].to_vec()
+        }
+    }
+}
+
+fn complete_frame_len_from(buffer: &[u8], start: usize) -> Option<usize> {
+    if buffer.len().saturating_sub(start) < DSS_HEADER_LEN {
+        return None;
+    }
+
+    let raw_length = u16::from_be_bytes([buffer[start], buffer[start + 1]]);
+    if raw_length != 0xFFFF {
+        let len = decode_dss_length(raw_length) as usize;
+        return (buffer.len().saturating_sub(start) >= len).then_some(start + len);
+    }
+
+    if buffer.len().saturating_sub(start) < DSS_MAX_SEGMENT_LEN {
+        return None;
+    }
+
+    let mut position = start + DSS_MAX_SEGMENT_LEN;
+    loop {
+        if buffer.len().saturating_sub(position) < DSS_CONTINUATION_HEADER_LEN {
+            return None;
+        }
+        let continuation_raw = u16::from_be_bytes([buffer[position], buffer[position + 1]]);
+        let continuation_len = decode_continuation_len(continuation_raw);
+        if continuation_len < DSS_CONTINUATION_HEADER_LEN {
+            return None;
+        }
+        if buffer.len().saturating_sub(position) < continuation_len {
+            return None;
+        }
+        position += continuation_len;
+        if !is_full_continuation_len(continuation_raw) {
+            return Some(position);
         }
     }
 }
@@ -634,5 +648,16 @@ mod tests {
         assert_eq!(frame.header.dss_type, DssType::Object);
         assert_eq!(frame.payload, payload);
         assert!(reader.next_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_first_complete_frame_len_waits_for_large_continuation() {
+        let payload = vec![0x5A; 70_000];
+        let mut writer = DssWriter::new(13);
+        writer.write_object(&payload, false);
+        let data = writer.finish();
+
+        assert_eq!(DssReader::first_complete_frame_len(&data), Some(data.len()));
+        assert_eq!(DssReader::first_complete_frame_len(&data[..40_000]), None);
     }
 }

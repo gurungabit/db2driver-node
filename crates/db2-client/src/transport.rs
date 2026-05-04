@@ -8,6 +8,8 @@ use tracing::{debug, trace, warn};
 use crate::config::{Config, SslConfig};
 use crate::error::Error;
 
+const READ_RESERVE: usize = 64 * 1024;
+
 /// Transport layer abstraction over TCP and TLS connections.
 pub enum Transport {
     Tcp(TcpStream),
@@ -141,8 +143,8 @@ impl Transport {
     /// Returns the number of bytes read (0 means EOF).
     pub async fn read_bytes(&mut self, buf: &mut BytesMut) -> Result<usize, Error> {
         // Ensure we have space to read into
-        if buf.capacity() - buf.len() < 4096 {
-            buf.reserve(4096);
+        if buf.capacity() - buf.len() < READ_RESERVE {
+            buf.reserve(READ_RESERVE);
         }
 
         let n = match self {

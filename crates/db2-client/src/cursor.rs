@@ -78,15 +78,21 @@ impl Cursor {
                 Some(codepoints::RTNEXTALL),
             )
         } else {
+            let use_extended_materialized_blocks = inner.zos_lob_internal_depth > 0
+                && inner
+                    .server_info
+                    .as_ref()
+                    .map_or(false, crate::connection::is_db2_zos_server);
             self.last_fetch_diagnostics.push(format!(
-                "cntqry_request has_lobs={} native_lobs=false rdbnam=false maxblkext=none qryrowset=none rtnextdta=none",
-                has_lobs
+                "cntqry_request has_lobs={} native_lobs=false rdbnam=false maxblkext={} qryrowset=none rtnextdta=none",
+                has_lobs,
+                if use_extended_materialized_blocks { "-1" } else { "none" }
             ));
             db2_proto::commands::cntqry::build_cntqry(
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
                 db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-                None,
+                use_extended_materialized_blocks.then_some(-1),
                 None,
             )
         };
