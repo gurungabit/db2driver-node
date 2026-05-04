@@ -1037,12 +1037,16 @@ impl ClientInner {
         let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
         let mut diagnostics = frame_diagnostics(frames);
+        let prefer_sqldard_descriptors = self.zos_lob_internal_depth > 0;
         if let Some(descriptors) = sqldard_descriptors.as_ref() {
             diagnostics.push(format!(
                 "initial_descriptors count={} {}",
                 descriptors.len(),
                 descriptor_summary(descriptors)
             ));
+        }
+        if prefer_sqldard_descriptors {
+            diagnostics.push("descriptor_preference=SQLDARD for internal z/OS LOB query".into());
         }
 
         process_query_frames(
@@ -1051,6 +1055,7 @@ impl ClientInner {
             &mut rows,
             &mut sqldard_descriptors,
             &mut qrydsc_descriptors,
+            prefer_sqldard_descriptors,
             &mut query_instance_id,
             &mut pending_row_bytes,
             &mut extdta_payloads,
@@ -1093,6 +1098,7 @@ impl ClientInner {
                 &mut rows,
                 &mut sqldard_descriptors,
                 &mut qrydsc_descriptors,
+                prefer_sqldard_descriptors,
                 &mut query_instance_id,
                 &mut pending_row_bytes,
                 &mut extdta_payloads,
@@ -1125,6 +1131,7 @@ impl ClientInner {
                     &mut rows,
                     &mut sqldard_descriptors,
                     &mut qrydsc_descriptors,
+                    prefer_sqldard_descriptors,
                     &mut query_instance_id,
                     &mut pending_row_bytes,
                     &mut extdta_payloads,
@@ -1144,10 +1151,13 @@ impl ClientInner {
 
         // If not end of query, continue fetching explicitly.
         if !end_of_query {
-            let cursor_descriptors = qrydsc_descriptors
-                .clone()
-                .or(sqldard_descriptors.clone())
-                .filter(|descriptors| !descriptors.is_empty());
+            let cursor_descriptors = preferred_descriptor_vec(
+                sqldard_descriptors.as_ref(),
+                qrydsc_descriptors.as_ref(),
+                prefer_sqldard_descriptors,
+            )
+            .cloned()
+            .filter(|descriptors| !descriptors.is_empty());
             if let Some(descriptors) = cursor_descriptors {
                 if debug_hex_enabled() {
                     eprintln!(
@@ -1208,7 +1218,11 @@ impl ClientInner {
             }
         }
 
-        let active_descriptors = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
+        let active_descriptors = preferred_descriptor_vec(
+            sqldard_descriptors.as_ref(),
+            qrydsc_descriptors.as_ref(),
+            prefer_sqldard_descriptors,
+        );
         if let Some(descriptors) = active_descriptors {
             apply_extdta_payloads_to_rows(&mut rows, descriptors, &extdta_payloads);
         }
@@ -3197,6 +3211,7 @@ fn process_query_frames(
     rows: &mut Vec<Row>,
     sqldard_descriptors: &mut Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
     qrydsc_descriptors: &mut Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    prefer_sqldard_descriptors: bool,
     query_instance_id: &mut Option<Vec<u8>>,
     pending_row_bytes: &mut Vec<u8>,
     extdta_payloads: &mut Vec<Vec<u8>>,
@@ -3264,6 +3279,7 @@ fn process_query_frames(
                                 rows,
                                 sqldard_descriptors,
                                 qrydsc_descriptors,
+                                prefer_sqldard_descriptors,
                                 pending_row_bytes,
                                 diagnostics,
                             )?;
@@ -3276,8 +3292,11 @@ fn process_query_frames(
                 }
                 codepoints::QRYDTA => {
                     trace!("Received QRYDTA");
-                    let active_descriptors =
-                        qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref());
+                    let active_descriptors = preferred_descriptor_vec(
+                        sqldard_descriptors.as_ref(),
+                        qrydsc_descriptors.as_ref(),
+                        prefer_sqldard_descriptors,
+                    );
                     if let Some(descs) = active_descriptors {
                         if descs.is_empty() {
                             continue;
@@ -3392,6 +3411,7 @@ fn process_query_frames(
                             rows,
                             sqldard_descriptors,
                             qrydsc_descriptors,
+                            prefer_sqldard_descriptors,
                             pending_row_bytes,
                             diagnostics,
                         )?;
@@ -3430,6 +3450,7 @@ fn decode_pending_query_data(
     rows: &mut Vec<Row>,
     sqldard_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
     qrydsc_descriptors: &Option<Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    prefer_sqldard_descriptors: bool,
     pending_row_bytes: &mut Vec<u8>,
     diagnostics: &mut Vec<String>,
 ) -> Result<(), Error> {
@@ -3437,7 +3458,11 @@ fn decode_pending_query_data(
         return Ok(());
     }
 
-    let Some(descs) = qrydsc_descriptors.as_ref().or(sqldard_descriptors.as_ref()) else {
+    let Some(descs) = preferred_descriptor_vec(
+        sqldard_descriptors.as_ref(),
+        qrydsc_descriptors.as_ref(),
+        prefer_sqldard_descriptors,
+    ) else {
         return Ok(());
     };
     if descs.is_empty() {
@@ -3499,6 +3524,18 @@ fn descriptor_summary(descriptors: &[db2_proto::fdoca::ColumnDescriptor]) -> Str
         format!("first16=[{}] total={}", shown, descriptors.len())
     } else {
         format!("all=[{}]", shown)
+    }
+}
+
+fn preferred_descriptor_vec<'a>(
+    sqldard_descriptors: Option<&'a Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    qrydsc_descriptors: Option<&'a Vec<db2_proto::fdoca::ColumnDescriptor>>,
+    prefer_sqldard: bool,
+) -> Option<&'a Vec<db2_proto::fdoca::ColumnDescriptor>> {
+    if prefer_sqldard {
+        sqldard_descriptors.or(qrydsc_descriptors)
+    } else {
+        qrydsc_descriptors.or(sqldard_descriptors)
     }
 }
 
