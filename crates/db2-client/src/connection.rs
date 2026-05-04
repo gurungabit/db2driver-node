@@ -787,85 +787,64 @@ impl ClientInner {
             output_values.push(values);
         }
 
-        for (column_index, column) in catalog_columns.iter().enumerate() {
-            if !column.is_lob() {
-                continue;
-            }
-
-            let lob_lengths = &lob_lengths_by_column[column_index];
-            let max_lob_len = lob_lengths.iter().flatten().copied().max().unwrap_or(0);
-            if max_lob_len == 0 {
-                continue;
-            }
-
-            let chunk_limit = zos_lob_chunk_limit(column);
-            let all_chunks = zos_lob_chunk_specs(max_lob_len, chunk_limit);
-            let mut chunk_index = 0usize;
-            while chunk_index < all_chunks.len() {
-                let mut chunk_window = Vec::new();
-                let mut chunk_window_chars = 0usize;
-                while chunk_index < all_chunks.len() {
-                    let chunk = all_chunks[chunk_index];
-                    if !chunk_window.is_empty()
-                        && chunk_window_chars + chunk.1 > zos_lob_chunk_window_target()
-                    {
-                        break;
-                    }
-                    chunk_window.push(chunk);
-                    chunk_window_chars += chunk.1;
-                    chunk_index += 1;
+        let chunk_specs = zos_lob_combined_chunk_specs(&catalog_columns, &lob_lengths_by_column);
+        let mut spec_index = 0usize;
+        while spec_index < chunk_specs.len() {
+            let mut spec_window = Vec::new();
+            let mut window_bytes = 0usize;
+            while spec_index < chunk_specs.len() {
+                let spec = chunk_specs[spec_index];
+                let spec_bytes = zos_lob_chunk_spec_estimated_bytes(&catalog_columns, spec);
+                if !spec_window.is_empty()
+                    && window_bytes + spec_bytes > zos_lob_chunk_window_target()
+                {
+                    break;
                 }
+                spec_window.push(spec);
+                window_bytes += spec_bytes;
+                spec_index += 1;
+            }
 
-                let rows_per_batch = zos_lob_rows_per_batch(column, chunk_window_chars);
-                let first_chunk_start = chunk_window.first().map(|chunk| chunk.0).unwrap_or(1);
-                let mut row_start = 0usize;
-                while row_start < output_values.len() {
-                    let row_end = (row_start + rows_per_batch).min(output_values.len());
-                    if !lob_lengths[row_start..row_end]
-                        .iter()
-                        .flatten()
-                        .any(|lob_len| *lob_len >= first_chunk_start)
-                    {
-                        row_start = row_end;
-                        continue;
-                    }
-
-                    let chunk_sql = build_zos_lob_chunk_grid_query(
-                        &parsed,
-                        column,
-                        &chunk_window,
-                        row_start + 1,
-                        row_end,
-                    );
-                    ensure_sqlstt_sql_len(&chunk_sql)?;
-                    let stage = format!(
-                        "chunk-grid column={} chunks={}..{} rows={}..{} max_lob_len={}",
-                        column.name,
-                        chunk_window
-                            .first()
-                            .map(|chunk| ((chunk.0 - 1) / chunk_limit) + 1)
-                            .unwrap_or(1),
-                        chunk_window
-                            .last()
-                            .map(|chunk| ((chunk.0 - 1) / chunk_limit) + 1)
-                            .unwrap_or(1),
-                        row_start + 1,
-                        row_end,
-                        max_lob_len
-                    );
-                    let chunk_result = self
-                        .execute_zos_lob_internal_query(&stage, &chunk_sql)
-                        .await?;
-                    chunk_query_count += 1;
-                    append_zos_lob_chunk_grid_rows(
-                        &chunk_result,
-                        column_index,
-                        lob_lengths,
-                        &mut output_values,
-                        &chunk_window,
-                    )?;
+            let rows_per_batch = zos_lob_combined_rows_per_batch(&catalog_columns, &spec_window);
+            let mut row_start = 0usize;
+            while row_start < output_values.len() {
+                let row_end = (row_start + rows_per_batch).min(output_values.len());
+                if !zos_lob_spec_window_applies_to_rows(
+                    &spec_window,
+                    &lob_lengths_by_column,
+                    row_start,
+                    row_end,
+                ) {
                     row_start = row_end;
+                    continue;
                 }
+
+                let chunk_sql = build_zos_lob_combined_chunk_grid_query(
+                    &parsed,
+                    &catalog_columns,
+                    &spec_window,
+                    row_start + 1,
+                    row_end,
+                );
+                ensure_sqlstt_sql_len(&chunk_sql)?;
+                let stage = format!(
+                    "chunk-grid-combined specs={} rows={}..{} estimated_row_bytes={}",
+                    spec_window.len(),
+                    row_start + 1,
+                    row_end,
+                    window_bytes
+                );
+                let chunk_result = self
+                    .execute_zos_lob_internal_query(&stage, &chunk_sql)
+                    .await?;
+                chunk_query_count += 1;
+                append_zos_lob_combined_chunk_grid_rows(
+                    &chunk_result,
+                    &spec_window,
+                    &lob_lengths_by_column,
+                    &mut output_values,
+                )?;
+                row_start = row_end;
             }
         }
 
@@ -876,7 +855,7 @@ impl ClientInner {
 
         let mut diagnostics = base_result.diagnostics;
         diagnostics.push(format!(
-            "zos_lob_chunked source={} strategy=base-plus-batched-chunks rows={} lob_columns={} chunk_queries={} clob_chunk_limit={} dbclob_chunk_limit={} batch_reply_target={} chunk_window_target={}",
+            "zos_lob_chunked source={} strategy=base-plus-combined-chunk-grid rows={} lob_columns={} chunk_queries={} clob_chunk_limit={} dbclob_chunk_limit={} batch_reply_target={} chunk_window_target={}",
             source,
             output_rows.len(),
             catalog_columns
@@ -2062,6 +2041,14 @@ struct CatalogColumn {
     coltype: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LobChunkSpec {
+    column_index: usize,
+    chunk_number: usize,
+    start: usize,
+    len: usize,
+}
+
 impl CatalogColumn {
     fn normalized_coltype(&self) -> String {
         self.coltype.trim().to_ascii_uppercase()
@@ -2234,6 +2221,7 @@ fn build_zos_scalar_value_query(
     )
 }
 
+#[cfg(test)]
 fn build_zos_lob_chunk_grid_query(
     parsed: &SimpleSelectStar,
     column: &CatalogColumn,
@@ -2266,6 +2254,47 @@ fn build_zos_lob_chunk_grid_query(
     )
 }
 
+fn build_zos_lob_combined_chunk_grid_query(
+    parsed: &SimpleSelectStar,
+    columns: &[CatalogColumn],
+    specs: &[LobChunkSpec],
+    row_start: usize,
+    row_end: usize,
+) -> String {
+    let projection = specs
+        .iter()
+        .map(|spec| {
+            let column = &columns[spec.column_index];
+            let ident = quote_sql_identifier(&column.name);
+            let cast_type = if column.is_dbclob() {
+                format!("VARGRAPHIC({})", spec.len)
+            } else {
+                format!("VARCHAR({})", spec.len)
+            };
+            format!(
+                "CAST(SUBSTR({ident}, {}, {}) AS {cast_type}) AS {}",
+                spec.start,
+                spec.len,
+                quote_sql_identifier(&lob_chunk_column_alias(spec))
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut idents = Vec::new();
+    for spec in specs {
+        let ident = quote_sql_identifier(&columns[spec.column_index].name);
+        if !idents.iter().any(|existing| existing == &ident) {
+            idents.push(ident);
+        }
+    }
+    let source_sql = build_zos_numbered_multi_column_source_sql(parsed, &idents);
+    format!(
+        "SELECT \"DB2NODE_RN\", {} FROM ({source_sql}) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" BETWEEN {} AND {}",
+        projection.join(", "),
+        row_start.max(1),
+        row_end.max(row_start.max(1))
+    )
+}
+
 #[cfg(test)]
 fn build_zos_lob_chunk_set_query(
     parsed: &SimpleSelectStar,
@@ -2287,6 +2316,39 @@ fn zos_lob_chunk_specs(max_lob_len: usize, chunk_limit: usize) -> Vec<(usize, us
         start += len;
     }
     chunks
+}
+
+fn zos_lob_combined_chunk_specs(
+    columns: &[CatalogColumn],
+    lob_lengths_by_column: &[Vec<Option<usize>>],
+) -> Vec<LobChunkSpec> {
+    let mut specs = Vec::new();
+    for (column_index, column) in columns.iter().enumerate() {
+        if !column.is_lob() {
+            continue;
+        }
+        let max_lob_len = lob_lengths_by_column
+            .get(column_index)
+            .and_then(|lengths| lengths.iter().flatten().copied().max())
+            .unwrap_or(0);
+        if max_lob_len == 0 {
+            continue;
+        }
+
+        let chunk_limit = zos_lob_chunk_limit(column);
+        for (chunk_index, (start, len)) in zos_lob_chunk_specs(max_lob_len, chunk_limit)
+            .into_iter()
+            .enumerate()
+        {
+            specs.push(LobChunkSpec {
+                column_index,
+                chunk_number: chunk_index + 1,
+                start,
+                len,
+            });
+        }
+    }
+    specs
 }
 
 fn zos_lob_chunk_limit(column: &CatalogColumn) -> usize {
@@ -2323,6 +2385,27 @@ fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn zos_lob_chunk_spec_estimated_bytes(columns: &[CatalogColumn], spec: LobChunkSpec) -> usize {
+    if columns
+        .get(spec.column_index)
+        .is_some_and(CatalogColumn::is_dbclob)
+    {
+        spec.len.saturating_mul(2)
+    } else {
+        spec.len
+    }
+}
+
+fn zos_lob_combined_rows_per_batch(columns: &[CatalogColumn], specs: &[LobChunkSpec]) -> usize {
+    let estimated_bytes_per_row = specs
+        .iter()
+        .map(|spec| zos_lob_chunk_spec_estimated_bytes(columns, *spec))
+        .sum::<usize>();
+
+    (zos_lob_batch_reply_target() / estimated_bytes_per_row.max(1)).max(1)
+}
+
+#[cfg(test)]
 fn zos_lob_rows_per_batch(column: &CatalogColumn, chunk_chars_per_row: usize) -> usize {
     let estimated_bytes_per_row = if column.is_dbclob() {
         chunk_chars_per_row.saturating_mul(2)
@@ -2333,6 +2416,25 @@ fn zos_lob_rows_per_batch(column: &CatalogColumn, chunk_chars_per_row: usize) ->
     (zos_lob_batch_reply_target() / estimated_bytes_per_row.max(1)).max(1)
 }
 
+fn zos_lob_spec_window_applies_to_rows(
+    specs: &[LobChunkSpec],
+    lob_lengths_by_column: &[Vec<Option<usize>>],
+    row_start: usize,
+    row_end: usize,
+) -> bool {
+    specs.iter().any(|spec| {
+        lob_lengths_by_column
+            .get(spec.column_index)
+            .is_some_and(|lengths| {
+                lengths[row_start..row_end]
+                    .iter()
+                    .flatten()
+                    .any(|lob_len| *lob_len >= spec.start)
+            })
+    })
+}
+
+#[cfg(test)]
 fn append_zos_lob_chunk_grid_rows(
     chunk_result: &QueryResult,
     column_index: usize,
@@ -2387,6 +2489,79 @@ fn append_zos_lob_chunk_grid_rows(
     Ok(())
 }
 
+fn append_zos_lob_combined_chunk_grid_rows(
+    chunk_result: &QueryResult,
+    specs: &[LobChunkSpec],
+    lob_lengths_by_column: &[Vec<Option<usize>>],
+    output_values: &mut [Vec<db2_proto::types::Db2Value>],
+) -> Result<(), Error> {
+    for (result_index, row) in chunk_result.rows.iter().enumerate() {
+        let row_number = match row.values().first() {
+            Some(value) => db2_value_to_usize(value)?.unwrap_or(result_index + 1),
+            None => result_index + 1,
+        };
+        let Some(row_index) = row_number.checked_sub(1) else {
+            continue;
+        };
+        if row_index >= output_values.len() {
+            continue;
+        }
+
+        for (spec_index, spec) in specs.iter().enumerate() {
+            let Some(lob_len) = lob_lengths_by_column
+                .get(spec.column_index)
+                .and_then(|lengths| lengths.get(row_index))
+                .and_then(|lob_len| *lob_len)
+            else {
+                continue;
+            };
+            if spec.start > lob_len {
+                continue;
+            }
+            let chunk = row
+                .values()
+                .get(spec_index + 1)
+                .and_then(db2_value_to_string)
+                .unwrap_or_default();
+            append_zos_lob_chunk_to_value(
+                output_values,
+                row_index,
+                spec.column_index,
+                lob_len,
+                &chunk,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn append_zos_lob_chunk_to_value(
+    output_values: &mut [Vec<db2_proto::types::Db2Value>],
+    row_index: usize,
+    column_index: usize,
+    lob_len: usize,
+    chunk: &str,
+) {
+    match output_values
+        .get_mut(row_index)
+        .and_then(|values| values.get_mut(column_index))
+    {
+        Some(db2_proto::types::Db2Value::Clob(text)) => {
+            let remaining = lob_len.saturating_sub(text.chars().count());
+            let chunk = trim_zos_lob_chunk_to_remaining(chunk, remaining);
+            text.push_str(chunk);
+        }
+        Some(value @ db2_proto::types::Db2Value::Null) if !chunk.is_empty() => {
+            let chunk = trim_zos_lob_chunk_to_remaining(chunk, lob_len);
+            if !chunk.is_empty() {
+                *value = db2_proto::types::Db2Value::Clob(chunk.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 fn append_zos_lob_chunk_rows(
     chunk_result: &QueryResult,
@@ -2415,6 +2590,7 @@ fn trim_zos_lob_chunk_to_remaining(chunk: &str, remaining_chars: usize) -> &str 
     }
 }
 
+#[cfg(test)]
 fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) -> String {
     if parsed.suffix.trim().is_empty() {
         format!(
@@ -2429,12 +2605,43 @@ fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident:
     }
 }
 
+fn build_zos_numbered_multi_column_source_sql(
+    parsed: &SimpleSelectStar,
+    idents: &[String],
+) -> String {
+    let projection = if idents.is_empty() {
+        "1".to_string()
+    } else {
+        idents.join(", ")
+    };
+    if parsed.suffix.trim().is_empty() {
+        format!(
+            "SELECT {projection}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {}",
+            parsed.table_ref
+        )
+    } else {
+        format!(
+            "SELECT {projection}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {} {}",
+            parsed.table_ref, parsed.suffix
+        )
+    }
+}
+
 fn lob_len_alias(index: usize) -> String {
     format!("DB2NODE_LOB_LEN_{}", index + 1)
 }
 
+#[cfg(test)]
 fn lob_chunk_alias(index: usize) -> String {
     format!("DB2NODE_LOB_CHUNK_{}", index + 1)
+}
+
+fn lob_chunk_column_alias(spec: &LobChunkSpec) -> String {
+    format!(
+        "DB2NODE_LOB_C{}_K{}",
+        spec.column_index + 1,
+        spec.chunk_number
+    )
 }
 
 fn zos_base_scalar_cast_len(column: &CatalogColumn) -> usize {
@@ -4899,6 +5106,58 @@ mod tests {
     }
 
     #[test]
+    fn build_zos_lob_combined_chunk_grid_query_fetches_multiple_lob_columns() {
+        let parsed = parse_simple_select_star(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 10 ROWS ONLY",
+            None,
+        )
+        .unwrap();
+        let columns = vec![
+            CatalogColumn {
+                name: "INSP_RPT_ID".to_string(),
+                coltype: "DECIMAL".to_string(),
+            },
+            CatalogColumn {
+                name: "INSP_RPT_DETL_DOC".to_string(),
+                coltype: "CLOB".to_string(),
+            },
+            CatalogColumn {
+                name: "UNDWR_ACTN_DETL_DOC".to_string(),
+                coltype: "CLOB".to_string(),
+            },
+        ];
+        let specs = vec![
+            LobChunkSpec {
+                column_index: 1,
+                chunk_number: 1,
+                start: 1,
+                len: 16_000,
+            },
+            LobChunkSpec {
+                column_index: 2,
+                chunk_number: 1,
+                start: 1,
+                len: 16_000,
+            },
+        ];
+
+        let sql = build_zos_lob_combined_chunk_grid_query(&parsed, &columns, &specs, 1, 10);
+
+        assert!(sql.starts_with("SELECT \"DB2NODE_RN\", "));
+        assert!(sql.contains(
+            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_C2_K1\""
+        ));
+        assert!(sql.contains(
+            "CAST(SUBSTR(\"UNDWR_ACTN_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_C3_K1\""
+        ));
+        assert!(sql.contains(
+            "SELECT \"INSP_RPT_DETL_DOC\", \"UNDWR_ACTN_DETL_DOC\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\""
+        ));
+        assert!(sql.contains("WHERE \"DB2NODE_RN\" BETWEEN 1 AND 10"));
+        assert!(!sql.contains("OFFSET"));
+    }
+
+    #[test]
     fn zos_lob_rows_per_batch_caps_estimated_reply_bytes() {
         let clob_column = CatalogColumn {
             name: "INSP_RPT_DETL_DOC".to_string(),
@@ -4976,6 +5235,56 @@ mod tests {
         .unwrap();
 
         assert_eq!(output_values[0][0], Db2Value::Clob("abcdef".to_string()));
+    }
+
+    #[test]
+    fn append_zos_lob_combined_chunk_grid_rows_appends_multiple_columns() {
+        let chunk_result = QueryResult::with_rows(
+            vec![Row::new(
+                vec![
+                    "DB2NODE_RN".to_string(),
+                    "DB2NODE_LOB_C2_K1".to_string(),
+                    "DB2NODE_LOB_C3_K1".to_string(),
+                ],
+                vec![
+                    Db2Value::Integer(1),
+                    Db2Value::VarChar("abc".to_string()),
+                    Db2Value::VarChar("xyz".to_string()),
+                ],
+            )],
+            Vec::new(),
+        );
+        let specs = vec![
+            LobChunkSpec {
+                column_index: 1,
+                chunk_number: 1,
+                start: 1,
+                len: 3,
+            },
+            LobChunkSpec {
+                column_index: 2,
+                chunk_number: 1,
+                start: 1,
+                len: 3,
+            },
+        ];
+        let lob_lengths_by_column = vec![vec![None], vec![Some(3)], vec![Some(3)]];
+        let mut output_values = vec![vec![
+            Db2Value::Decimal("1".to_string()),
+            Db2Value::Clob(String::new()),
+            Db2Value::Clob(String::new()),
+        ]];
+
+        append_zos_lob_combined_chunk_grid_rows(
+            &chunk_result,
+            &specs,
+            &lob_lengths_by_column,
+            &mut output_values,
+        )
+        .unwrap();
+
+        assert_eq!(output_values[0][1], Db2Value::Clob("abc".to_string()));
+        assert_eq!(output_values[0][2], Db2Value::Clob("xyz".to_string()));
     }
 
     #[test]
