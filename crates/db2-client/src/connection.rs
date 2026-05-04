@@ -552,6 +552,34 @@ impl ClientInner {
             let qryblksz: u32 = 0x0000FFFF;
 
             if params.is_empty() && use_zos_sqlstt {
+                let mut writer = DssWriter::new(corr_id);
+                writer.write_request_next_same_corr(&prpsqlstt_data, true);
+                writer.write_object(&sqlstt_data, false);
+
+                let send_buf = writer.finish();
+                self.send_bytes(&send_buf).await?;
+
+                let frames = self.read_prepare_reply_frames().await?;
+                let column_info = self.parse_prepare_reply(&frames)?;
+                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+
+                if self.zos_lob_internal_depth == 0 {
+                    let current_schema = self.config.current_schema.clone();
+                    let prepare_columns =
+                        catalog_columns_from_prepare_metadata(&column_info, &result_descriptors);
+                    if let Some(result) = self
+                        .execute_zos_select_lobs_chunked_with_catalog(
+                            sql,
+                            current_schema.as_deref(),
+                            &prepare_columns,
+                            "prepare",
+                        )
+                        .await?
+                    {
+                        return Ok(result);
+                    }
+                }
+
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
@@ -563,18 +591,13 @@ impl ClientInner {
                     ddm.build()
                 };
 
+                let corr_id = self.next_correlation_id();
                 let mut writer = DssWriter::new(corr_id);
-                writer.write_request_next_same_corr(&prpsqlstt_data, true);
-                writer.write_object(&sqlstt_data, true);
-                writer.set_correlation_id(self.next_correlation_id());
                 writer.write_request(&opnqry_data, false);
-
                 let send_buf = writer.finish();
                 self.send_bytes(&send_buf).await?;
 
-                let frames = self.read_execute_reply_frames().await?;
-                let column_info = self.parse_prepare_reply(&frames)?;
-                let result_descriptors = self.parse_prepare_result_descriptors(&frames);
+                let frames = self.read_reply_frames().await?;
                 return self
                     .process_query_reply(&frames, &column_info, Some(&result_descriptors))
                     .await;
@@ -674,17 +697,33 @@ impl ClientInner {
         current_schema: Option<&str>,
         metadata: &QueryResult,
     ) -> Result<Option<QueryResult>, Error> {
-        let Some(base_sql) = build_zos_select_star_lob_base_query(sql, current_schema, metadata)
+        let catalog_columns = catalog_columns_from_query_result(metadata);
+        self.execute_zos_select_lobs_chunked_with_catalog(
+            sql,
+            current_schema,
+            &catalog_columns,
+            "catalog",
+        )
+        .await
+    }
+
+    async fn execute_zos_select_lobs_chunked_with_catalog(
+        &mut self,
+        sql: &str,
+        current_schema: Option<&str>,
+        catalog_columns: &[CatalogColumn],
+        source: &str,
+    ) -> Result<Option<QueryResult>, Error> {
+        let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)
+            .ok_or_else(|| Error::Protocol("failed to parse simple z/OS LOB query".into()))?;
+        let catalog_columns = selected_catalog_columns(&parsed, catalog_columns)
+            .ok_or_else(|| Error::Protocol("failed to select z/OS catalog columns".into()))?;
+        let Some(base_sql) = build_zos_lob_base_query_from_columns(&parsed, &catalog_columns)
         else {
             return Ok(None);
         };
         ensure_sqlstt_sql_len(&base_sql)?;
 
-        let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)
-            .ok_or_else(|| Error::Protocol("failed to parse simple z/OS LOB query".into()))?;
-        let catalog_columns =
-            selected_catalog_columns(&parsed, &catalog_columns_from_query_result(metadata))
-                .ok_or_else(|| Error::Protocol("failed to select z/OS catalog columns".into()))?;
         let base_result = self
             .execute_zos_lob_internal_query("base", &base_sql)
             .await?;
@@ -730,7 +769,8 @@ impl ClientInner {
 
         let mut diagnostics = base_result.diagnostics;
         diagnostics.push(format!(
-            "zos_lob_chunked rows={} lob_columns={} clob_chunk_limit={} dbclob_chunk_limit={}",
+            "zos_lob_chunked source={} rows={} lob_columns={} clob_chunk_limit={} dbclob_chunk_limit={}",
+            source,
             output_rows.len(),
             catalog_columns
                 .iter()
@@ -1892,6 +1932,7 @@ fn build_zos_select_star_metadata_query(sql: &str, current_schema: Option<&str>)
     ))
 }
 
+#[cfg(test)]
 fn build_zos_select_star_lob_base_query(
     sql: &str,
     current_schema: Option<&str>,
@@ -1899,6 +1940,13 @@ fn build_zos_select_star_lob_base_query(
 ) -> Option<String> {
     let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)?;
     let columns = selected_catalog_columns(&parsed, &catalog_columns_from_query_result(metadata))?;
+    build_zos_lob_base_query_from_columns(&parsed, &columns)
+}
+
+fn build_zos_lob_base_query_from_columns(
+    parsed: &SimpleSelectStar,
+    columns: &[CatalogColumn],
+) -> Option<String> {
     if columns.is_empty() || !columns.iter().any(CatalogColumn::is_lob) {
         return None;
     }
@@ -2050,6 +2098,72 @@ fn catalog_columns_from_query_result(metadata: &QueryResult) -> Vec<CatalogColum
             (!name.is_empty()).then_some(CatalogColumn { name, coltype })
         })
         .collect()
+}
+
+fn catalog_columns_from_prepare_metadata(
+    columns: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> Vec<CatalogColumn> {
+    columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            let name = column.name.trim();
+            if name.is_empty() || is_generated_column_name(name) {
+                return None;
+            }
+            let coltype = prepare_column_catalog_type(column, descriptors.get(index));
+            Some(CatalogColumn {
+                name: name.to_string(),
+                coltype,
+            })
+        })
+        .collect()
+}
+
+fn prepare_column_catalog_type(
+    column: &ColumnInfo,
+    descriptor: Option<&db2_proto::fdoca::ColumnDescriptor>,
+) -> String {
+    if column
+        .name
+        .eq_ignore_ascii_case("DB2_GENERATED_ROWID_FOR_LOBS")
+        || column.type_name.to_ascii_uppercase().contains("ROWID")
+    {
+        return "ROWID".into();
+    }
+
+    if let Some(descriptor) = descriptor {
+        match descriptor.db2_type {
+            db2_proto::types::Db2Type::Clob
+            | db2_proto::types::Db2Type::ClobLocator
+            | db2_proto::types::Db2Type::LobChar(_) => return "CLOB".into(),
+            db2_proto::types::Db2Type::DbClob | db2_proto::types::Db2Type::DbClobLocator => {
+                return "DBCLOB".into()
+            }
+            db2_proto::types::Db2Type::VarChar(len) if len & 0x8000 != 0 || len >= 32_704 => {
+                return "CLOB".into();
+            }
+            db2_proto::types::Db2Type::VarGraphic(len) if len & 0x8000 != 0 || len >= 16_352 => {
+                return "DBCLOB".into();
+            }
+            db2_proto::types::Db2Type::RowId(_) => return "ROWID".into(),
+            _ => {}
+        }
+    }
+
+    let normalized_type = column
+        .type_name
+        .trim()
+        .to_ascii_uppercase()
+        .replace(' ', "");
+    if normalized_type.contains("DBCLOB") || normalized_type.starts_with("VARGRAPHIC(327") {
+        "DBCLOB".into()
+    } else if normalized_type.contains("CLOB") || normalized_type.starts_with("VARCHAR(327") {
+        "CLOB".into()
+    } else {
+        "OTHER".into()
+    }
 }
 
 fn selected_catalog_columns(
