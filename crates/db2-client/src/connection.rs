@@ -547,7 +547,7 @@ impl ClientInner {
                 let column_info = self.parse_prepare_reply(&frames)?;
                 let result_descriptors = self.parse_prepare_result_descriptors(&frames);
 
-                if self.zos_lob_internal_depth == 0 && force_zos_substr_lob_strategy() {
+                if self.zos_lob_internal_depth == 0 && !use_native_zos_lob_strategy() {
                     let current_schema = self.config.current_schema.clone();
                     let prepare_columns =
                         catalog_columns_from_prepare_metadata(&column_info, &result_descriptors);
@@ -596,7 +596,7 @@ impl ClientInner {
                         codepoints::QRYBLKSZ,
                         db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
                     );
-                    if has_zos_lobs && !force_zos_substr_lob_strategy() {
+                    if has_zos_lobs && use_native_zos_lob_strategy() {
                         ddm.add_u16(codepoints::MAXBLKEXT, (-1i16) as u16);
                         ddm.add_u32(codepoints::QRYROWSET, native_zos_lob_qryrowset());
                     }
@@ -614,18 +614,18 @@ impl ClientInner {
                 let result = self
                     .process_query_reply(&frames, &column_info, Some(&result_descriptors))
                     .await;
-                if force_zos_substr_lob_strategy() {
-                    return self
-                        .retry_zos_lob_chunking_after_decode_error(
-                            sql,
-                            result,
-                            &column_info,
-                            &result_descriptors,
-                            "direct-decode-error",
-                        )
-                        .await;
+                if use_native_zos_lob_strategy() {
+                    return result;
                 }
-                return result;
+                return self
+                    .retry_zos_lob_chunking_after_decode_error(
+                        sql,
+                        result,
+                        &column_info,
+                        &result_descriptors,
+                        "direct-decode-error",
+                    )
+                    .await;
             }
 
             let mut writer = DssWriter::new(corr_id);
@@ -758,11 +758,10 @@ impl ClientInner {
             .iter()
             .map(|column| column.name.clone())
             .collect::<Vec<_>>();
-        let mut output_values = Vec::with_capacity(base_result.rows.len());
-        let mut lob_lengths_by_column: Vec<Vec<Option<usize>>> =
-            vec![Vec::new(); catalog_columns.len()];
+        let mut output_rows = Vec::with_capacity(base_result.rows.len());
+        let mut chunk_query_count = 0usize;
 
-        for base_row in &base_result.rows {
+        for (row_index, base_row) in base_result.rows.iter().enumerate() {
             let base_values = base_row.values().to_vec();
             let mut values = Vec::with_capacity(catalog_columns.len());
             for (column_index, column) in catalog_columns.iter().enumerate() {
@@ -771,43 +770,25 @@ impl ClientInner {
                     .cloned()
                     .unwrap_or(db2_proto::types::Db2Value::Null);
                 if column.is_clob() || column.is_dbclob() {
-                    let lob_len = db2_value_to_usize(&base_value)?;
-                    lob_lengths_by_column[column_index].push(lob_len);
-                    values.push(match lob_len {
-                        Some(len) => db2_proto::types::Db2Value::Clob(String::with_capacity(len)),
-                        None => db2_proto::types::Db2Value::Null,
-                    });
+                    let Some(lob_len) = db2_value_to_usize(&base_value)? else {
+                        values.push(db2_proto::types::Db2Value::Null);
+                        continue;
+                    };
+                    let (text, chunks) = self
+                        .fetch_zos_lob_chunks(&parsed, column, row_index + 1, lob_len)
+                        .await?;
+                    chunk_query_count += chunks;
+                    values.push(db2_proto::types::Db2Value::Clob(text));
                 } else {
                     values.push(normalize_zos_materialized_scalar_value(column, base_value));
                 }
             }
-            output_values.push(values);
+            output_rows.push(Row::new(output_names.clone(), values));
         }
-
-        let mut chunk_query_count = 0usize;
-        for (column_index, column) in catalog_columns.iter().enumerate() {
-            if !column.is_lob() {
-                continue;
-            }
-            chunk_query_count += self
-                .fetch_zos_lob_chunks_for_column(
-                    &parsed,
-                    column,
-                    column_index,
-                    &lob_lengths_by_column[column_index],
-                    &mut output_values,
-                )
-                .await?;
-        }
-
-        let output_rows = output_values
-            .into_iter()
-            .map(|values| Row::new(output_names.clone(), values))
-            .collect::<Vec<_>>();
 
         let mut diagnostics = base_result.diagnostics;
         diagnostics.push(format!(
-            "zos_lob_chunked source={} strategy=base-plus-windowed-chunks rows={} lob_columns={} chunk_queries={} clob_chunk_limit={} dbclob_chunk_limit={} batch_reply_target={}",
+            "zos_lob_chunked source={} strategy=base-plus-row-chunks rows={} lob_columns={} chunk_queries={} clob_chunk_limit={} dbclob_chunk_limit={}",
             source,
             output_rows.len(),
             catalog_columns
@@ -816,8 +797,7 @@ impl ClientInner {
                 .count(),
             chunk_query_count,
             ZOS_CLOB_CHUNK_LIMIT,
-            ZOS_DBCLOB_CHUNK_LIMIT,
-            ZOS_LOB_BATCH_REPLY_TARGET
+            ZOS_DBCLOB_CHUNK_LIMIT
         ));
 
         Ok(Some(QueryResult::with_rows_and_diagnostics(
@@ -963,21 +943,14 @@ impl ClientInner {
         })
     }
 
-    async fn fetch_zos_lob_chunks_for_column(
+    async fn fetch_zos_lob_chunks(
         &mut self,
         parsed: &SimpleSelectStar,
         column: &CatalogColumn,
-        column_index: usize,
-        lob_lengths: &[Option<usize>],
-        output_values: &mut [Vec<db2_proto::types::Db2Value>],
-    ) -> Result<usize, Error> {
-        let Some(max_lob_len) = lob_lengths.iter().flatten().copied().max() else {
-            return Ok(0);
-        };
-        if max_lob_len == 0 {
-            return Ok(0);
-        }
-
+        row_number: usize,
+        lob_len: usize,
+    ) -> Result<(String, usize), Error> {
+        let mut text = String::with_capacity(lob_len);
         let mut start = 1usize;
         let chunk_limit = if column.is_dbclob() {
             ZOS_DBCLOB_CHUNK_LIMIT
@@ -986,141 +959,30 @@ impl ClientInner {
         };
         let mut chunk_query_count = 0usize;
 
-        while start <= max_lob_len {
-            let chunk_len = chunk_limit.min(max_lob_len - start + 1);
+        while start <= lob_len {
+            let chunk_len = chunk_limit.min(lob_len - start + 1);
             let chunk_number = ((start - 1) / chunk_limit) + 1;
-            let rows_per_batch = zos_lob_rows_per_batch(column, chunk_len);
-            let mut row_start = 1usize;
-
-            while row_start <= lob_lengths.len() {
-                let row_end = (row_start + rows_per_batch - 1).min(lob_lengths.len());
-                if !lob_lengths[row_start - 1..row_end]
-                    .iter()
-                    .any(|lob_len| lob_len.is_some_and(|lob_len| start <= lob_len))
-                {
-                    row_start = row_end + 1;
-                    continue;
-                }
-
-                let chunk_sql = build_zos_lob_chunk_set_query(
-                    parsed, column, start, chunk_len, row_start, row_end,
-                );
-                ensure_sqlstt_sql_len(&chunk_sql)?;
-                let stage = format!(
-                    "chunk-set column={} chunk={} start={} len={} max_lob_len={} rows={} row_window={}..{} rows_per_batch={}",
-                    column.name,
-                    chunk_number,
-                    start,
-                    chunk_len,
-                    max_lob_len,
-                    lob_lengths.len(),
-                    row_start,
-                    row_end,
-                    rows_per_batch
-                );
-                let chunk_result = self
-                    .execute_zos_lob_internal_query(&stage, &chunk_sql)
-                    .await;
-
-                match chunk_result {
-                    Ok(chunk_result) => {
-                        chunk_query_count += 1;
-                        append_zos_lob_chunk_rows(
-                            &chunk_result,
-                            column_index,
-                            lob_lengths,
-                            output_values,
-                            start,
-                        )?;
-                    }
-                    Err(batch_error) => {
-                        let batch_error = batch_error.to_string();
-                        self.reset_session_state(false).await;
-                        self.establish_session().await?;
-                        chunk_query_count += self
-                            .fetch_zos_lob_chunk_rows_individually(
-                                parsed,
-                                column,
-                                column_index,
-                                lob_lengths,
-                                output_values,
-                                start,
-                                chunk_len,
-                                chunk_number,
-                                row_start,
-                                row_end,
-                                &batch_error,
-                            )
-                            .await
-                            .map_err(|fallback_error| {
-                                Error::Protocol(format!(
-                                    "z/OS LOB chunk-set fallback failed after batch error: {}; fallback_error={}",
-                                    batch_error, fallback_error
-                                ))
-                            })?;
-                    }
-                }
-
-                row_start = row_end + 1;
-            }
-            start += chunk_len;
-        }
-
-        Ok(chunk_query_count)
-    }
-
-    async fn fetch_zos_lob_chunk_rows_individually(
-        &mut self,
-        parsed: &SimpleSelectStar,
-        column: &CatalogColumn,
-        column_index: usize,
-        lob_lengths: &[Option<usize>],
-        output_values: &mut [Vec<db2_proto::types::Db2Value>],
-        start: usize,
-        chunk_len: usize,
-        chunk_number: usize,
-        row_start: usize,
-        row_end: usize,
-        batch_error: &str,
-    ) -> Result<usize, Error> {
-        let mut chunk_query_count = 0usize;
-
-        for row_number in row_start..=row_end {
-            if !lob_lengths
-                .get(row_number - 1)
-                .and_then(|lob_len| *lob_len)
-                .is_some_and(|lob_len| start <= lob_len)
-            {
-                continue;
-            }
-
-            let chunk_sql = build_zos_lob_chunk_set_query(
-                parsed, column, start, chunk_len, row_number, row_number,
-            );
+            let chunk_sql = build_zos_lob_chunk_query(parsed, column, row_number, start, chunk_len);
             ensure_sqlstt_sql_len(&chunk_sql)?;
             let stage = format!(
-                "chunk-row column={} chunk={} start={} len={} row={} fallback_after={}",
-                column.name,
-                chunk_number,
-                start,
-                chunk_len,
-                row_number,
-                summarize_text_for_diagnostics(batch_error, 96)
+                "chunk row={} column={} chunk={} start={} len={} lob_len={}",
+                row_number, column.name, chunk_number, start, chunk_len, lob_len
             );
             let chunk_result = self
                 .execute_zos_lob_internal_query(&stage, &chunk_sql)
                 .await?;
             chunk_query_count += 1;
-            append_zos_lob_chunk_rows(
-                &chunk_result,
-                column_index,
-                lob_lengths,
-                output_values,
-                start,
-            )?;
+            let chunk = chunk_result
+                .rows
+                .first()
+                .and_then(|row| row.values().first())
+                .and_then(db2_value_to_string)
+                .unwrap_or_default();
+            text.push_str(&chunk);
+            start += chunk_len;
         }
 
-        Ok(chunk_query_count)
+        Ok((text, chunk_query_count))
     }
 
     /// Execute a DML statement with parameters.
@@ -2122,8 +1984,9 @@ const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 #[cfg(test)]
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
-const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
+const ZOS_CLOB_CHUNK_LIMIT: usize = 32_704;
 const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
+#[cfg(test)]
 const ZOS_LOB_BATCH_REPLY_TARGET: usize = 64_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2313,6 +2176,27 @@ fn build_zos_scalar_value_query(
     )
 }
 
+fn build_zos_lob_chunk_query(
+    parsed: &SimpleSelectStar,
+    column: &CatalogColumn,
+    row_number: usize,
+    start: usize,
+    len: usize,
+) -> String {
+    let ident = quote_sql_identifier(&column.name);
+    let cast_type = if column.is_dbclob() {
+        format!("VARGRAPHIC({len})")
+    } else {
+        format!("VARCHAR({len})")
+    };
+    let source_sql = build_zos_numbered_single_column_source_sql(parsed, &ident);
+    format!(
+        "SELECT CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS \"DB2NODE_LOB_CHUNK\" FROM ({source_sql}) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = {}",
+        row_number.max(1)
+    )
+}
+
+#[cfg(test)]
 fn build_zos_lob_chunk_set_query(
     parsed: &SimpleSelectStar,
     column: &CatalogColumn,
@@ -2335,6 +2219,7 @@ fn build_zos_lob_chunk_set_query(
     )
 }
 
+#[cfg(test)]
 fn zos_lob_rows_per_batch(column: &CatalogColumn, chunk_len: usize) -> usize {
     let estimated_bytes_per_row = if column.is_dbclob() {
         chunk_len.saturating_mul(2)
@@ -2345,6 +2230,7 @@ fn zos_lob_rows_per_batch(column: &CatalogColumn, chunk_len: usize) -> usize {
     (ZOS_LOB_BATCH_REPLY_TARGET / estimated_bytes_per_row.max(1)).max(1)
 }
 
+#[cfg(test)]
 fn append_zos_lob_chunk_rows(
     chunk_result: &QueryResult,
     column_index: usize,
@@ -2394,6 +2280,7 @@ fn append_zos_lob_chunk_rows(
     Ok(())
 }
 
+#[cfg(test)]
 fn trim_zos_lob_chunk_to_remaining(chunk: &str, remaining_chars: usize) -> &str {
     if remaining_chars == 0 {
         return "";
@@ -3060,20 +2947,11 @@ fn summarize_sql_for_diagnostics(sql: &str) -> String {
     compact
 }
 
-fn summarize_text_for_diagnostics(value: &str, max_len: usize) -> String {
-    let mut compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.len() > max_len {
-        compact.truncate(max_len);
-        compact.push_str("...");
-    }
-    compact
-}
-
-fn force_zos_substr_lob_strategy() -> bool {
+fn use_native_zos_lob_strategy() -> bool {
     env::var("DB2_ZOS_LOB_STRATEGY")
-        .map(|value| value.eq_ignore_ascii_case("substr"))
+        .map(|value| value.eq_ignore_ascii_case("native"))
         .unwrap_or(false)
-        || env::var_os("DB2_ZOS_LOB_SUBSTR_ONLY").is_some()
+        || env::var_os("DB2_ZOS_NATIVE_LOB_ONLY").is_some()
 }
 
 pub(crate) fn native_zos_lob_qryrowset() -> u32 {
