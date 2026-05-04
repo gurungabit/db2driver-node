@@ -520,6 +520,20 @@ impl ClientInner {
         let is_query = sql_is_query(sql);
         let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
         let use_zos_cursor_attributes = is_query && use_zos_sqlstt && !params.is_empty();
+        if is_query && params.is_empty() && use_zos_sqlstt {
+            let current_schema = self.config.current_schema.clone();
+            if let Some(metadata_sql) =
+                build_zos_select_star_metadata_query(sql, current_schema.as_deref())
+            {
+                let metadata = Box::pin(self.execute_query(&metadata_sql, &[])).await?;
+                if let Some(result) = self
+                    .execute_zos_select_star_lobs_chunked(sql, current_schema.as_deref(), &metadata)
+                    .await?
+                {
+                    return Ok(result);
+                }
+            }
+        }
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         let mut input_descriptors = Vec::new();
 
@@ -706,10 +720,22 @@ impl ClientInner {
             output_rows.push(Row::new(output_names.clone(), values));
         }
 
+        let mut diagnostics = base_result.diagnostics;
+        diagnostics.push(format!(
+            "zos_lob_chunked rows={} lob_columns={} clob_chunk_limit={} dbclob_chunk_limit={}",
+            output_rows.len(),
+            catalog_columns
+                .iter()
+                .filter(|column| column.is_lob())
+                .count(),
+            ZOS_CLOB_CHUNK_LIMIT,
+            ZOS_DBCLOB_CHUNK_LIMIT
+        ));
+
         Ok(Some(QueryResult::with_rows_and_diagnostics(
             output_rows,
             output_columns,
-            base_result.diagnostics,
+            diagnostics,
         )))
     }
 
@@ -1724,7 +1750,9 @@ impl Client {
 // ============================================================
 
 const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
+#[cfg(test)]
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
+#[cfg(test)]
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
 const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
 const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
@@ -2096,6 +2124,7 @@ fn escape_sql_string_literal(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+#[cfg(test)]
 fn rewrite_zos_lob_select(sql: &str, columns: &[ColumnInfo]) -> Option<String> {
     if columns.is_empty() || !sql_is_query(sql) {
         return None;
