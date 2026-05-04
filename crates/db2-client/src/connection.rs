@@ -763,7 +763,7 @@ impl ClientInner {
                         .await?;
                     let lob_len_value = lob_len_result
                         .rows
-                        .first()
+                        .get(row_index)
                         .and_then(|row| row.values().first())
                         .cloned()
                         .unwrap_or(db2_proto::types::Db2Value::Null);
@@ -969,7 +969,7 @@ impl ClientInner {
                 .await?;
             let chunk = chunk_result
                 .rows
-                .first()
+                .get(row_number.saturating_sub(1))
                 .and_then(|row| row.values().first())
                 .and_then(db2_value_to_string)
                 .unwrap_or_default();
@@ -997,7 +997,7 @@ impl ClientInner {
 
         let value = result
             .rows
-            .first()
+            .get(row_number.saturating_sub(1))
             .and_then(|row| row.values().first())
             .cloned()
             .unwrap_or(db2_proto::types::Db2Value::Null);
@@ -2244,11 +2244,11 @@ fn build_zos_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) ->
 }
 
 fn zos_row_window_clause(row_number: usize) -> String {
-    let offset = row_number.saturating_sub(1);
-    if offset == 0 {
+    let row_number = row_number.max(1);
+    if row_number == 1 {
         "FETCH FIRST 1 ROW ONLY".to_string()
     } else {
-        format!("OFFSET {offset} ROWS FETCH FIRST 1 ROW ONLY")
+        format!("FETCH FIRST {row_number} ROWS ONLY")
     }
 }
 
@@ -4628,7 +4628,7 @@ mod tests {
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &decimal_column, 2),
-            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC OFFSET 1 ROWS FETCH FIRST 1 ROW ONLY"
+            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC FETCH FIRST 2 ROWS ONLY"
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &rowid_column, 1),
@@ -4651,7 +4651,8 @@ mod tests {
         let sql = build_zos_lob_chunk_query(&parsed, &column, 2, 16001, 16000);
 
         assert!(sql.contains("CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 16001, 16000) AS VARCHAR(16000))"));
-        assert!(sql.contains("OFFSET 1 ROWS FETCH FIRST 1 ROW ONLY"));
+        assert!(sql.contains("FETCH FIRST 2 ROWS ONLY"));
+        assert!(!sql.contains("OFFSET"));
     }
 
     #[test]
