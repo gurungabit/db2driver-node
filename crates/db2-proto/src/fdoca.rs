@@ -772,6 +772,9 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
         Db2Type::LobBytes(len) => {
             let flen = (*len & 0x7FFF) as usize;
             if data.len() < flen {
+                if is_short_externalized_lob_reference(data, flen) {
+                    return Ok((Db2Value::Blob(data.to_vec()), data.len()));
+                }
                 return Err(ProtoError::BufferTooShort {
                     expected: flen,
                     actual: data.len(),
@@ -790,6 +793,9 @@ fn decode_column_value(data: &[u8], col: &ColumnDescriptor) -> Result<(Db2Value,
         Db2Type::LobChar(len) => {
             let flen = (*len & 0x7FFF) as usize;
             if data.len() < flen {
+                if is_short_externalized_lob_reference(data, flen) {
+                    return Ok((Db2Value::Clob(format_lob_locator(data)), data.len()));
+                }
                 return Err(ProtoError::BufferTooShort {
                     expected: flen,
                     actual: data.len(),
@@ -881,6 +887,12 @@ fn decode_externalized_lob_header(
 
 fn format_lob_locator(bytes: &[u8]) -> String {
     format!("LOB locator 0x{}", bytes_to_hex(bytes))
+}
+
+fn is_short_externalized_lob_reference(data: &[u8], declared_len: usize) -> bool {
+    declared_len >= 1024
+        && (16..declared_len).contains(&data.len())
+        && data.iter().filter(|byte| byte.is_ascii_hexdigit()).count() >= 16
 }
 
 fn format_rowid(bytes: &[u8]) -> String {
@@ -1208,6 +1220,30 @@ mod tests {
         let (values, consumed) = decode_row(b"D356673C", &cols).unwrap();
         assert_eq!(consumed, 8);
         assert_eq!(values[0], Db2Value::VarChar("D356673C".to_string()));
+    }
+
+    #[test]
+    fn test_lobbytes_short_externalized_reference_consumes_available_bytes() {
+        let cols = vec![ColumnDescriptor {
+            column_index: 0,
+            drda_type: 0x50,
+            length: 4096,
+            precision: 0,
+            scale: 0,
+            nullable: false,
+            ccsid: 1,
+            db2_type: Db2Type::LobBytes(4096),
+            byte_order: ByteOrder::LittleEndian,
+        }];
+        let data = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x1C, 0x00, 0x00, 0xDA, 0xDB, 0xFF, 0x38, b'8', b'0',
+            b'6', b'1', b'D', b'F', b'D', b'3', b'5', b'6', b'6', b'7', b'3', b'C', b'2', b'8',
+            b'E',
+        ];
+
+        let (values, consumed) = decode_row(&data, &cols).unwrap();
+        assert_eq!(consumed, data.len());
+        assert_eq!(values[0], Db2Value::Blob(data.to_vec()));
     }
 
     #[test]
