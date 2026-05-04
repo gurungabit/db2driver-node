@@ -56,6 +56,7 @@ pub(crate) struct ClientInner {
     pub recv_buf: BytesMut,
     pub next_prepared_section: u16,
     pub free_prepared_sections: Vec<u16>,
+    pub zos_lob_internal_depth: usize,
 }
 
 impl ClientInner {
@@ -217,6 +218,7 @@ impl ClientInner {
         self.recv_buf.clear();
         self.next_prepared_section = 1;
         self.free_prepared_sections.clear();
+        self.zos_lob_internal_depth = 0;
 
         if let Some(mut transport) = self.transport.take() {
             let _ = transport.close().await;
@@ -520,12 +522,14 @@ impl ClientInner {
         let is_query = sql_is_query(sql);
         let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
         let use_zos_cursor_attributes = is_query && use_zos_sqlstt && !params.is_empty();
-        if is_query && params.is_empty() && use_zos_sqlstt {
+        if is_query && params.is_empty() && use_zos_sqlstt && self.zos_lob_internal_depth == 0 {
             let current_schema = self.config.current_schema.clone();
             if let Some(metadata_sql) =
                 build_zos_select_star_metadata_query(sql, current_schema.as_deref())
             {
-                let metadata = Box::pin(self.execute_query(&metadata_sql, &[])).await?;
+                let metadata = self
+                    .execute_zos_lob_internal_query("metadata", &metadata_sql)
+                    .await?;
                 if let Some(result) = self
                     .execute_zos_select_star_lobs_chunked(sql, current_schema.as_deref(), &metadata)
                     .await?
@@ -681,7 +685,9 @@ impl ClientInner {
         let catalog_columns =
             selected_catalog_columns(&parsed, &catalog_columns_from_query_result(metadata))
                 .ok_or_else(|| Error::Protocol("failed to select z/OS catalog columns".into()))?;
-        let base_result = Box::pin(self.execute_query(&base_sql, &[])).await?;
+        let base_result = self
+            .execute_zos_lob_internal_query("base", &base_sql)
+            .await?;
 
         let output_columns = zos_lob_output_columns(
             &catalog_columns,
@@ -741,6 +747,35 @@ impl ClientInner {
         )))
     }
 
+    async fn execute_zos_lob_internal_query(
+        &mut self,
+        stage: &str,
+        sql: &str,
+    ) -> Result<QueryResult, Error> {
+        ensure_sqlstt_sql_len(sql)?;
+        let step_timeout = if self.config.query_timeout.is_zero() {
+            Duration::from_secs(30)
+        } else {
+            self.config.query_timeout
+        };
+
+        self.zos_lob_internal_depth += 1;
+        let result = timeout(step_timeout, Box::pin(self.execute_query(sql, &[]))).await;
+        self.zos_lob_internal_depth = self.zos_lob_internal_depth.saturating_sub(1);
+
+        match result {
+            Ok(result) => result,
+            Err(_) => {
+                let sql_preview = summarize_sql_for_diagnostics(sql);
+                self.reset_session_state(false).await;
+                Err(Error::Timeout(format!(
+                    "z/OS LOB {stage} timed out after {:?}; connection was closed to avoid protocol desynchronization; sql={sql_preview}",
+                    step_timeout
+                )))
+            }
+        }
+    }
+
     async fn fetch_zos_lob_chunks(
         &mut self,
         parsed: &SimpleSelectStar,
@@ -758,9 +793,16 @@ impl ClientInner {
 
         while start <= lob_len {
             let chunk_len = chunk_limit.min(lob_len - start + 1);
+            let chunk_number = ((start - 1) / chunk_limit) + 1;
             let chunk_sql = build_zos_lob_chunk_query(parsed, column, row_number, start, chunk_len);
             ensure_sqlstt_sql_len(&chunk_sql)?;
-            let chunk_result = Box::pin(self.execute_query(&chunk_sql, &[])).await?;
+            let stage = format!(
+                "chunk row={} column={} chunk={} start={} len={} lob_len={}",
+                row_number, column.name, chunk_number, start, chunk_len, lob_len
+            );
+            let chunk_result = self
+                .execute_zos_lob_internal_query(&stage, &chunk_sql)
+                .await?;
             let chunk = chunk_result
                 .rows
                 .first()
@@ -1522,6 +1564,7 @@ impl Client {
                 recv_buf: BytesMut::with_capacity(8192),
                 next_prepared_section: 1,
                 free_prepared_sections: Vec::new(),
+                zos_lob_internal_depth: 0,
             })),
             pool_checkout: StdMutex::new(None),
         }
@@ -2315,6 +2358,16 @@ fn split_table_ref_parts(table_ref: &str) -> Option<Vec<String>> {
 
 fn escape_sql_string_literal(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn summarize_sql_for_diagnostics(sql: &str) -> String {
+    let mut compact = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_LEN: usize = 320;
+    if compact.len() > MAX_LEN {
+        compact.truncate(MAX_LEN);
+        compact.push_str("...");
+    }
+    compact
 }
 
 #[cfg(test)]
