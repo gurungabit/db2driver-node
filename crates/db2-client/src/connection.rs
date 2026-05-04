@@ -1823,6 +1823,11 @@ pub(crate) fn build_sqlstt_for_server(sql: &str, use_zos_format: bool) -> Vec<u8
 
 fn build_zos_select_star_metadata_query(sql: &str, current_schema: Option<&str>) -> Option<String> {
     let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)?;
+    if parsed.schema.eq_ignore_ascii_case("SYSIBM")
+        && parsed.table.eq_ignore_ascii_case("SYSCOLUMNS")
+    {
+        return None;
+    }
     Some(format!(
         "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = '{}' AND TBNAME = '{}' ORDER BY COLNO",
         escape_sql_string_literal(&parsed.schema.to_ascii_uppercase()),
@@ -3788,6 +3793,15 @@ mod tests {
             query,
             "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = 'FIREINSP' AND TBNAME = 'INSP_RPT' ORDER BY COLNO"
         );
+    }
+
+    #[test]
+    fn build_zos_select_star_metadata_query_does_not_recurse_on_catalog_query() {
+        assert!(build_zos_select_star_metadata_query(
+            "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = 'FIREINSP'",
+            None,
+        )
+        .is_none());
     }
 
     #[test]
