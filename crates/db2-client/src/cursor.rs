@@ -62,7 +62,7 @@ impl Cursor {
 
         self.last_fetch_diagnostics.clear();
         let cntqry_data = if has_lobs {
-            let qryrowset = inner.config.fetch_size.max(1);
+            let qryrowset = crate::connection::native_zos_lob_qryrowset();
             self.last_fetch_diagnostics.push(
                 format!(
                     "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset={} rtnextdta=RTNEXTALL",

@@ -598,7 +598,7 @@ impl ClientInner {
                     );
                     if has_zos_lobs && !force_zos_substr_lob_strategy() {
                         ddm.add_u16(codepoints::MAXBLKEXT, (-1i16) as u16);
-                        ddm.add_u32(codepoints::QRYROWSET, self.config.fetch_size.max(1));
+                        ddm.add_u32(codepoints::QRYROWSET, native_zos_lob_qryrowset());
                     }
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()
@@ -3074,6 +3074,14 @@ fn force_zos_substr_lob_strategy() -> bool {
         .map(|value| value.eq_ignore_ascii_case("substr"))
         .unwrap_or(false)
         || env::var_os("DB2_ZOS_LOB_SUBSTR_ONLY").is_some()
+}
+
+pub(crate) fn native_zos_lob_qryrowset() -> u32 {
+    env::var("DB2_ZOS_NATIVE_LOB_QRYROWSET")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
