@@ -62,18 +62,38 @@ impl Cursor {
 
         self.last_fetch_diagnostics.clear();
         let cntqry_data = if has_lobs {
-            self.last_fetch_diagnostics.push(
-                "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset=none rtnextdta=RTNEXTALL"
-                    .to_string(),
-            );
-            db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
-                &pkgnamcsn,
-                self.query_instance_id.as_deref(),
-                db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
-                Some(-1),
-                None,
-                Some(codepoints::RTNEXTALL),
-            )
+            if inner
+                .server_info
+                .as_ref()
+                .map_or(false, crate::connection::is_db2_zos_server)
+            {
+                self.last_fetch_diagnostics.push(
+                    "cntqry_request has_lobs=true rdbnam=true maxblkext=-1 qryrowset=none rtnextdta=RTNEXTALL"
+                        .to_string(),
+                );
+                db2_proto::commands::cntqry::build_cntqry_with_rdbnam_and_rtnextdta(
+                    &inner.config.database,
+                    &pkgnamcsn,
+                    self.query_instance_id.as_deref(),
+                    db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                    Some(-1),
+                    None,
+                    Some(codepoints::RTNEXTALL),
+                )
+            } else {
+                self.last_fetch_diagnostics.push(
+                    "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset=none rtnextdta=RTNEXTALL"
+                        .to_string(),
+                );
+                db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
+                    &pkgnamcsn,
+                    self.query_instance_id.as_deref(),
+                    db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
+                    Some(-1),
+                    None,
+                    Some(codepoints::RTNEXTALL),
+                )
+            }
         } else {
             self.last_fetch_diagnostics.push(
                 "cntqry_request has_lobs=false rdbnam=false maxblkext=none qryrowset=none rtnextdta=none"

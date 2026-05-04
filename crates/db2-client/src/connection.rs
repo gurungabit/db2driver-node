@@ -547,7 +547,7 @@ impl ClientInner {
                 let column_info = self.parse_prepare_reply(&frames)?;
                 let result_descriptors = self.parse_prepare_result_descriptors(&frames);
 
-                if self.zos_lob_internal_depth == 0 {
+                if self.zos_lob_internal_depth == 0 && force_zos_substr_lob_strategy() {
                     let current_schema = self.config.current_schema.clone();
                     let prepare_columns =
                         catalog_columns_from_prepare_metadata(&column_info, &result_descriptors);
@@ -1459,15 +1459,6 @@ impl ClientInner {
             .filter(|descriptors| !descriptors.is_empty());
             if let Some(descriptors) = cursor_descriptors {
                 let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
-                if self.zos_lob_internal_depth == 0
-                    && self.server_info.as_ref().map_or(false, is_db2_zos_server)
-                    && descriptors_need_zos_lob_materialization(&cursor_column_info, &descriptors)
-                {
-                    return Err(Error::Protocol(format!(
-                        "z/OS LOB result requires transparent materialization after QRYDSC; {}",
-                        descriptor_summary(&descriptors)
-                    )));
-                }
                 if debug_hex_enabled() {
                     eprintln!(
                         "[db2-wire] opening cursor fallback with {} decoded row(s), pending_tail={}",
@@ -3078,6 +3069,13 @@ fn summarize_text_for_diagnostics(value: &str, max_len: usize) -> String {
         compact.push_str("...");
     }
     compact
+}
+
+fn force_zos_substr_lob_strategy() -> bool {
+    env::var("DB2_ZOS_LOB_STRATEGY")
+        .map(|value| value.eq_ignore_ascii_case("substr"))
+        .unwrap_or(false)
+        || env::var_os("DB2_ZOS_LOB_SUBSTR_ONLY").is_some()
 }
 
 #[cfg(test)]
