@@ -522,22 +522,6 @@ impl ClientInner {
         let is_query = sql_is_query(sql);
         let use_zos_sqlstt = self.server_info.as_ref().map_or(false, is_db2_zos_server);
         let use_zos_cursor_attributes = is_query && use_zos_sqlstt && !params.is_empty();
-        if is_query && params.is_empty() && use_zos_sqlstt && self.zos_lob_internal_depth == 0 {
-            let current_schema = self.config.current_schema.clone();
-            if let Some(metadata_sql) =
-                build_zos_select_star_metadata_query(sql, current_schema.as_deref())
-            {
-                let metadata = self
-                    .execute_zos_lob_internal_query("metadata", &metadata_sql)
-                    .await?;
-                if let Some(result) = self
-                    .execute_zos_select_star_lobs_chunked(sql, current_schema.as_deref(), &metadata)
-                    .await?
-                {
-                    return Ok(result);
-                }
-            }
-        }
         let pkgnamcsn = self.direct_query_pkgnamcsn();
         let mut input_descriptors = Vec::new();
 
@@ -943,6 +927,13 @@ impl ClientInner {
                 )))
             }
         }
+        .map_err(|err| {
+            Error::Protocol(format!(
+                "z/OS LOB {stage} failed: {}; sql={}",
+                err,
+                summarize_sql_for_diagnostics(sql)
+            ))
+        })
     }
 
     async fn fetch_zos_lob_chunks(
