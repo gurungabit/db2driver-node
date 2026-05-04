@@ -1972,8 +1972,16 @@ fn catalog_columns_from_query_result(metadata: &QueryResult) -> Vec<CatalogColum
         .rows
         .iter()
         .filter_map(|row| {
-            let name = row.get::<String>("NAME")?.trim().to_string();
-            let coltype = row.get::<String>("COLTYPE")?.trim().to_string();
+            let name = row
+                .get::<String>("NAME")
+                .or_else(|| row.get_by_index::<String>(0))?
+                .trim()
+                .to_string();
+            let coltype = row
+                .get::<String>("COLTYPE")
+                .or_else(|| row.get_by_index::<String>(1))?
+                .trim()
+                .to_string();
             (!name.is_empty()).then_some(CatalogColumn { name, coltype })
         })
         .collect()
@@ -3660,6 +3668,28 @@ mod tests {
         assert!(rewritten
             .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
+    }
+
+    #[test]
+    fn catalog_columns_from_query_result_falls_back_to_positions() {
+        let metadata = QueryResult::with_rows(
+            vec![Row::new(
+                vec!["COL1".to_string(), "COL2".to_string()],
+                vec![
+                    Db2Value::VarChar("INSP_RPT_DETL_DOC".to_string()),
+                    Db2Value::Char("CLOB    ".to_string()),
+                ],
+            )],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            catalog_columns_from_query_result(&metadata),
+            vec![CatalogColumn {
+                name: "INSP_RPT_DETL_DOC".to_string(),
+                coltype: "CLOB".to_string()
+            }]
+        );
     }
 
     #[test]
