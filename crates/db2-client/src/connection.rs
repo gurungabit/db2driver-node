@@ -2467,10 +2467,7 @@ fn move_generated_rowid_column_last(columns: Vec<CatalogColumn>) -> Vec<CatalogC
     let mut visible = Vec::with_capacity(columns.len());
     let mut generated_rowids = Vec::new();
     for column in columns {
-        if column
-            .name
-            .eq_ignore_ascii_case("DB2_GENERATED_ROWID_FOR_LOBS")
-        {
+        if is_generated_lob_rowid_column_name(&column.name) {
             generated_rowids.push(column);
         } else {
             visible.push(column);
@@ -2551,7 +2548,13 @@ fn selected_catalog_columns(
     catalog_columns: &[CatalogColumn],
 ) -> Option<Vec<CatalogColumn>> {
     match parsed.selected_columns.as_ref() {
-        None => Some(catalog_columns.to_vec()),
+        None => Some(
+            catalog_columns
+                .iter()
+                .filter(|column| !is_generated_lob_rowid_column_name(&column.name))
+                .cloned()
+                .collect(),
+        ),
         Some(selected_names) => {
             let mut selected_columns = Vec::with_capacity(selected_names.len());
             for selected_name in selected_names {
@@ -2563,6 +2566,10 @@ fn selected_catalog_columns(
             Some(selected_columns)
         }
     }
+}
+
+fn is_generated_lob_rowid_column_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("DB2_GENERATED_ROWID_FOR_LOBS")
 }
 
 #[cfg(test)]
@@ -4445,8 +4452,7 @@ mod tests {
         assert!(rewritten.contains(
             "CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN_2\""
         ));
-        assert!(rewritten
-            .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
+        assert!(!rewritten.contains("DB2_GENERATED_ROWID_FOR_LOBS"));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
     }
 
@@ -4556,6 +4562,39 @@ mod tests {
                 "INSP_RPT_DETL_DOC",
                 "DB2_GENERATED_ROWID_FOR_LOBS"
             ]
+        );
+    }
+
+    #[test]
+    fn selected_catalog_columns_omits_generated_rowid_for_select_star() {
+        let parsed = parse_simple_select_star(
+            "SELECT * FROM FIREINSP.INSP_RPT FETCH FIRST 1 ROW ONLY",
+            None,
+        )
+        .unwrap();
+        let columns = vec![
+            CatalogColumn {
+                name: "INSP_RPT_ID".to_string(),
+                coltype: "DECIMAL".to_string(),
+            },
+            CatalogColumn {
+                name: "INSP_RPT_DETL_DOC".to_string(),
+                coltype: "CLOB".to_string(),
+            },
+            CatalogColumn {
+                name: "DB2_GENERATED_ROWID_FOR_LOBS".to_string(),
+                coltype: "ROWID".to_string(),
+            },
+        ];
+
+        let selected = selected_catalog_columns(&parsed, &columns).unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["INSP_RPT_ID", "INSP_RPT_DETL_DOC"]
         );
     }
 
