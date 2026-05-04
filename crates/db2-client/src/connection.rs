@@ -838,10 +838,11 @@ impl ClientInner {
         }
 
         let current_schema = self.config.current_schema.clone();
-        if should_reconnect_before_zos_lob_retry(&original_error) {
-            self.reset_session_state(false).await;
-            self.establish_session().await?;
-        }
+        // A failed native z/OS LOB cursor can leave the direct-query package
+        // section open. Reconnect before SUBSTR/catalog fallback so those
+        // internal queries do not collide with the abandoned cursor (-502).
+        self.reset_session_state(false).await;
+        self.establish_session().await?;
         let prepare_columns =
             catalog_columns_from_prepare_metadata(column_info, result_descriptors);
         if !prepare_columns.is_empty() {
@@ -2561,18 +2562,6 @@ fn should_retry_zos_lob_chunking_after_decode_error(error: &Error) -> bool {
             message.contains("query ended with undecoded row data")
                 || message.contains("query fetch stalled while decoding row data")
                 || message.contains("z/OS LOB result requires transparent materialization")
-        }
-        Error::Timeout(message) => {
-            message.contains("fetch timed out") && message.contains("has_lobs=true")
-        }
-        _ => false,
-    }
-}
-
-fn should_reconnect_before_zos_lob_retry(error: &Error) -> bool {
-    match error {
-        Error::Protocol(message) => {
-            message.contains("z/OS LOB result requires transparent materialization")
         }
         Error::Timeout(message) => {
             message.contains("fetch timed out") && message.contains("has_lobs=true")
