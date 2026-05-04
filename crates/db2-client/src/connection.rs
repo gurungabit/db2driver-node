@@ -2044,8 +2044,8 @@ const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
 const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
 const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
-const ZOS_LOB_BATCH_REPLY_TARGET: usize = 192_000;
-const ZOS_LOB_CHUNK_WINDOW_TARGET: usize = 64_000;
+const ZOS_LOB_BATCH_REPLY_TARGET: usize = 1_000_000;
+const ZOS_LOB_CHUNK_WINDOW_TARGET: usize = 128_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SimpleSelectStar {
@@ -2302,7 +2302,7 @@ fn zos_lob_batch_reply_target() -> usize {
         "DB2_ZOS_LOB_BATCH_BYTES",
         ZOS_LOB_BATCH_REPLY_TARGET,
         16_000,
-        512_000,
+        4_000_000,
     )
 }
 
@@ -2311,7 +2311,7 @@ fn zos_lob_chunk_window_target() -> usize {
         "DB2_ZOS_LOB_CHUNK_WINDOW_BYTES",
         ZOS_LOB_CHUNK_WINDOW_TARGET,
         8_000,
-        128_000,
+        512_000,
     )
 }
 
@@ -4909,9 +4909,9 @@ mod tests {
             coltype: "DBCLOB".to_string(),
         };
 
-        assert_eq!(zos_lob_rows_per_batch(&clob_column, 16_000), 12);
-        assert_eq!(zos_lob_rows_per_batch(&dbclob_column, 8_000), 12);
-        assert_eq!(zos_lob_rows_per_batch(&clob_column, 64_000), 3);
+        assert_eq!(zos_lob_rows_per_batch(&clob_column, 16_000), 62);
+        assert_eq!(zos_lob_rows_per_batch(&dbclob_column, 8_000), 62);
+        assert_eq!(zos_lob_rows_per_batch(&clob_column, 64_000), 15);
     }
 
     #[test]
