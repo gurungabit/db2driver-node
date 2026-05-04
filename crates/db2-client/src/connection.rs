@@ -825,6 +825,10 @@ impl ClientInner {
         }
 
         let current_schema = self.config.current_schema.clone();
+        if should_reconnect_before_zos_lob_retry(&original_error) {
+            self.reset_session_state(false).await;
+            self.establish_session().await?;
+        }
         let prepare_columns =
             catalog_columns_from_prepare_metadata(column_info, result_descriptors);
         if !prepare_columns.is_empty() {
@@ -1360,6 +1364,16 @@ impl ClientInner {
             .cloned()
             .filter(|descriptors| !descriptors.is_empty());
             if let Some(descriptors) = cursor_descriptors {
+                let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
+                if self.zos_lob_internal_depth == 0
+                    && self.server_info.as_ref().map_or(false, is_db2_zos_server)
+                    && descriptors_need_zos_lob_materialization(&cursor_column_info, &descriptors)
+                {
+                    return Err(Error::Protocol(format!(
+                        "z/OS LOB result requires transparent materialization after QRYDSC; {}",
+                        descriptor_summary(&descriptors)
+                    )));
+                }
                 if debug_hex_enabled() {
                     eprintln!(
                         "[db2-wire] opening cursor fallback with {} decoded row(s), pending_tail={}",
@@ -1367,7 +1381,6 @@ impl ClientInner {
                         pending_row_bytes.len()
                     );
                 }
-                let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
                 let mut cursor = Cursor::new(
                     cursor_column_info,
                     descriptors,
@@ -2366,15 +2379,39 @@ fn db2_value_to_string(value: &db2_proto::types::Db2Value) -> Option<String> {
 }
 
 fn should_retry_zos_lob_chunking_after_decode_error(error: &Error) -> bool {
-    let Error::Protocol(message) = error else {
-        return false;
-    };
+    match error {
+        Error::Protocol(message) => {
+            message.contains("query ended with undecoded row data")
+                || message.contains("query fetch stalled while decoding row data")
+                || message.contains("z/OS LOB result requires transparent materialization")
+        }
+        Error::Timeout(message) => {
+            message.contains("fetch timed out") && message.contains("has_lobs=true")
+        }
+        _ => false,
+    }
+}
 
-    message.contains("query ended with undecoded row data")
-        || message.contains("query fetch stalled while decoding row data")
+fn should_reconnect_before_zos_lob_retry(error: &Error) -> bool {
+    match error {
+        Error::Protocol(message) => {
+            message.contains("z/OS LOB result requires transparent materialization")
+        }
+        Error::Timeout(message) => {
+            message.contains("fetch timed out") && message.contains("has_lobs=true")
+        }
+        _ => false,
+    }
 }
 
 fn result_metadata_needs_zos_lob_route(
+    columns: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> bool {
+    descriptors_need_zos_lob_materialization(columns, descriptors)
+}
+
+fn descriptors_need_zos_lob_materialization(
     columns: &[ColumnInfo],
     descriptors: &[db2_proto::fdoca::ColumnDescriptor],
 ) -> bool {
