@@ -2215,11 +2215,7 @@ fn should_retry_zos_lob_chunking_after_decode_error(error: &Error) -> bool {
     };
 
     message.contains("query ended with undecoded row data")
-        && (message.contains("LobBytes")
-            || message.contains("LobChar")
-            || message.contains("drda=0x50")
-            || message.contains("drda=0x51")
-            || message.contains("LOB locator"))
+        || message.contains("query fetch stalled while decoding row data")
 }
 
 fn result_metadata_needs_zos_lob_route(
