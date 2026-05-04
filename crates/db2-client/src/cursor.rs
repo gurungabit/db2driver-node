@@ -62,16 +62,19 @@ impl Cursor {
 
         self.last_fetch_diagnostics.clear();
         let cntqry_data = if has_lobs {
+            let qryrowset = inner.config.fetch_size.max(1);
             self.last_fetch_diagnostics.push(
-                "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset=none rtnextdta=RTNEXTALL"
-                    .to_string(),
+                format!(
+                    "cntqry_request has_lobs=true rdbnam=false maxblkext=-1 qryrowset={} rtnextdta=RTNEXTALL",
+                    qryrowset
+                ),
             );
             db2_proto::commands::cntqry::build_cntqry_with_rtnextdta(
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),
                 db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
                 Some(-1),
-                None,
+                Some(qryrowset),
                 Some(codepoints::RTNEXTALL),
             )
         } else {
@@ -165,7 +168,11 @@ impl Cursor {
                     );
                 }
                 if let Some(err) = crate::connection::protocol_reply_error(&obj, "fetch") {
-                    return Err(err);
+                    return Err(Error::Protocol(format!(
+                        "{}; last_fetch=[{}]",
+                        err,
+                        self.last_fetch_diagnostics.join("; ")
+                    )));
                 }
                 match obj.code_point {
                     codepoints::QRYDTA => {
