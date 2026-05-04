@@ -61,7 +61,7 @@ impl Cursor {
             || column_info_needs_lob_fetch(&self.column_info);
 
         self.last_fetch_diagnostics.clear();
-        let cntqry_data = if has_lobs {
+        let cntqry_data = if has_lobs && crate::connection::use_native_zos_lob_strategy() {
             let qryrowset = crate::connection::native_zos_lob_qryrowset();
             self.last_fetch_diagnostics.push(
                 format!(
@@ -78,10 +78,10 @@ impl Cursor {
                 Some(codepoints::RTNEXTALL),
             )
         } else {
-            self.last_fetch_diagnostics.push(
-                "cntqry_request has_lobs=false rdbnam=false maxblkext=none qryrowset=none rtnextdta=none"
-                    .to_string(),
-            );
+            self.last_fetch_diagnostics.push(format!(
+                "cntqry_request has_lobs={} native_lobs=false rdbnam=false maxblkext=none qryrowset=none rtnextdta=none",
+                has_lobs
+            ));
             db2_proto::commands::cntqry::build_cntqry(
                 &pkgnamcsn,
                 self.query_instance_id.as_deref(),

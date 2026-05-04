@@ -1331,6 +1331,15 @@ impl ClientInner {
             .filter(|descriptors| !descriptors.is_empty());
             if let Some(descriptors) = cursor_descriptors {
                 let cursor_column_info = column_info_for_cursor_fetch(column_info, &descriptors);
+                if self.server_info.as_ref().map_or(false, is_db2_zos_server)
+                    && !use_native_zos_lob_strategy()
+                    && descriptors_need_zos_lob_materialization(&cursor_column_info, &descriptors)
+                {
+                    return Err(Error::Protocol(format!(
+                        "z/OS LOB result requires transparent materialization after cursor descriptors; {}",
+                        descriptor_summary(&descriptors)
+                    )));
+                }
                 if debug_hex_enabled() {
                     eprintln!(
                         "[db2-wire] opening cursor fallback with {} decoded row(s), pending_tail={}",
@@ -2947,7 +2956,7 @@ fn summarize_sql_for_diagnostics(sql: &str) -> String {
     compact
 }
 
-fn use_native_zos_lob_strategy() -> bool {
+pub(crate) fn use_native_zos_lob_strategy() -> bool {
     env::var("DB2_ZOS_LOB_STRATEGY")
         .map(|value| value.eq_ignore_ascii_case("native"))
         .unwrap_or(false)
