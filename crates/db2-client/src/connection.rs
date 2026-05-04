@@ -738,36 +738,29 @@ impl ClientInner {
             return Ok(None);
         }
 
-        let row_probe_sql = build_zos_lob_row_probe_query(&parsed);
-        let row_probe_result = self
-            .execute_zos_lob_internal_query("row-probe", &row_probe_sql)
+        let base_sql = build_zos_lob_base_query_from_columns(&parsed, &catalog_columns)
+            .ok_or_else(|| Error::Protocol("failed to build z/OS LOB base query".into()))?;
+        let base_result = self
+            .execute_zos_lob_internal_query("base", &base_sql)
             .await?;
 
-        let output_columns =
-            zos_lob_output_columns(&catalog_columns, &[], row_probe_result.row_count);
+        let output_columns = zos_lob_output_columns(&catalog_columns, &[], base_result.row_count);
         let output_names = output_columns
             .iter()
             .map(|column| column.name.clone())
             .collect::<Vec<_>>();
-        let mut output_rows = Vec::with_capacity(row_probe_result.rows.len());
+        let mut output_rows = Vec::with_capacity(base_result.rows.len());
 
-        for row_index in 0..row_probe_result.rows.len() {
+        for (row_index, base_row) in base_result.rows.iter().enumerate() {
+            let base_values = base_row.values().to_vec();
             let mut values = Vec::with_capacity(catalog_columns.len());
-            for column in &catalog_columns {
+            for (column_index, column) in catalog_columns.iter().enumerate() {
+                let base_value = base_values
+                    .get(column_index)
+                    .cloned()
+                    .unwrap_or(db2_proto::types::Db2Value::Null);
                 if column.is_clob() || column.is_dbclob() {
-                    let lob_len_result = self
-                        .execute_zos_lob_internal_query(
-                            &format!("length row={} column={}", row_index + 1, column.name),
-                            &build_zos_lob_length_query(&parsed, column, row_index + 1),
-                        )
-                        .await?;
-                    let lob_len_value = lob_len_result
-                        .rows
-                        .first()
-                        .and_then(|row| row.values().first())
-                        .cloned()
-                        .unwrap_or(db2_proto::types::Db2Value::Null);
-                    let Some(lob_len) = db2_value_to_usize(&lob_len_value)? else {
+                    let Some(lob_len) = db2_value_to_usize(&base_value)? else {
                         values.push(db2_proto::types::Db2Value::Null);
                         continue;
                     };
@@ -776,18 +769,15 @@ impl ClientInner {
                         .await?;
                     values.push(db2_proto::types::Db2Value::Clob(text));
                 } else {
-                    values.push(
-                        self.fetch_zos_scalar_column(&parsed, column, row_index + 1)
-                            .await?,
-                    );
+                    values.push(normalize_zos_materialized_scalar_value(column, base_value));
                 }
             }
             output_rows.push(Row::new(output_names.clone(), values));
         }
 
-        let mut diagnostics = row_probe_result.diagnostics;
+        let mut diagnostics = base_result.diagnostics;
         diagnostics.push(format!(
-            "zos_lob_chunked source={} strategy=per-column rows={} lob_columns={} clob_chunk_limit={} dbclob_chunk_limit={}",
+            "zos_lob_chunked source={} strategy=base-plus-chunks rows={} lob_columns={} clob_chunk_limit={} dbclob_chunk_limit={}",
             source,
             output_rows.len(),
             catalog_columns
@@ -978,45 +968,6 @@ impl ClientInner {
         }
 
         Ok(text)
-    }
-
-    async fn fetch_zos_scalar_column(
-        &mut self,
-        parsed: &SimpleSelectStar,
-        column: &CatalogColumn,
-        row_number: usize,
-    ) -> Result<db2_proto::types::Db2Value, Error> {
-        let sql = build_zos_scalar_value_query(parsed, column, row_number);
-        ensure_sqlstt_sql_len(&sql)?;
-        let result = self
-            .execute_zos_lob_internal_query(
-                &format!("scalar row={} column={}", row_number, column.name),
-                &sql,
-            )
-            .await?;
-
-        let value = result
-            .rows
-            .first()
-            .and_then(|row| row.values().first())
-            .cloned()
-            .unwrap_or(db2_proto::types::Db2Value::Null);
-
-        if column.is_rowid() {
-            return Ok(match db2_value_to_string(&value) {
-                Some(hex) if !hex.trim().is_empty() => {
-                    let hex = hex.trim();
-                    if hex.starts_with("0x") || hex.starts_with("0X") {
-                        db2_proto::types::Db2Value::RowId(hex.to_string())
-                    } else {
-                        db2_proto::types::Db2Value::RowId(format!("0x{hex}"))
-                    }
-                }
-                _ => db2_proto::types::Db2Value::Null,
-            });
-        }
-
-        Ok(value)
     }
 
     /// Execute a DML statement with parameters.
@@ -2027,7 +1978,7 @@ const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 #[cfg(test)]
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
-const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
+const ZOS_CLOB_CHUNK_LIMIT: usize = 32_704;
 const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2117,7 +2068,6 @@ fn build_zos_select_star_lob_base_query(
     build_zos_lob_base_query_from_columns(&parsed, &columns)
 }
 
-#[cfg(test)]
 fn build_zos_lob_base_query_from_columns(
     parsed: &SimpleSelectStar,
     columns: &[CatalogColumn],
@@ -2164,6 +2114,7 @@ fn build_zos_lob_base_query_from_columns(
     }
 }
 
+#[cfg(test)]
 fn build_zos_lob_row_probe_query(parsed: &SimpleSelectStar) -> String {
     let suffix = parsed.suffix.trim();
     if suffix.is_empty() {
@@ -2179,6 +2130,7 @@ fn build_zos_lob_row_probe_query(parsed: &SimpleSelectStar) -> String {
     }
 }
 
+#[cfg(test)]
 fn build_zos_lob_length_query(
     parsed: &SimpleSelectStar,
     column: &CatalogColumn,
@@ -2193,6 +2145,7 @@ fn build_zos_lob_length_query(
     )
 }
 
+#[cfg(test)]
 fn build_zos_scalar_value_query(
     parsed: &SimpleSelectStar,
     column: &CatalogColumn,
@@ -2249,7 +2202,6 @@ fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident:
     }
 }
 
-#[cfg(test)]
 fn lob_len_alias(index: usize) -> String {
     format!("DB2NODE_LOB_LEN_{}", index + 1)
 }
@@ -2333,6 +2285,27 @@ fn catalog_column_type_name(column: &CatalogColumn) -> String {
         "Char".into()
     } else {
         column.coltype.trim().to_string()
+    }
+}
+
+fn normalize_zos_materialized_scalar_value(
+    column: &CatalogColumn,
+    value: db2_proto::types::Db2Value,
+) -> db2_proto::types::Db2Value {
+    if !column.is_rowid() {
+        return value;
+    }
+
+    match db2_value_to_string(&value) {
+        Some(hex) if !hex.trim().is_empty() => {
+            let hex = hex.trim();
+            if hex.starts_with("0x") || hex.starts_with("0X") {
+                db2_proto::types::Db2Value::RowId(hex.to_string())
+            } else {
+                db2_proto::types::Db2Value::RowId(format!("0x{hex}"))
+            }
+        }
+        _ => db2_proto::types::Db2Value::Null,
     }
 }
 
