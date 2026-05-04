@@ -587,6 +587,8 @@ impl ClientInner {
                     }
                 }
 
+                let has_zos_lobs =
+                    result_metadata_needs_zos_lob_route(&column_info, &result_descriptors);
                 let opnqry_data = {
                     let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::OPNQRY);
                     ddm.add_code_point(codepoints::PKGNAMCSN, &pkgnamcsn);
@@ -594,6 +596,9 @@ impl ClientInner {
                         codepoints::QRYBLKSZ,
                         db2_proto::commands::opnqry::DEFAULT_QRYBLKSZ,
                     );
+                    if has_zos_lobs && !force_zos_substr_lob_strategy() {
+                        ddm.add_code_point(codepoints::RTNEXTDTA, &[codepoints::RTNEXTALL]);
+                    }
                     ddm.add_code_point(0x215D, &[0x01]); // QRYCLSIMP = 1 (close on endqry)
                     ddm.build()
                 };
