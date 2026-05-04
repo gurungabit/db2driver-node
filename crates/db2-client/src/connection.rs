@@ -763,7 +763,7 @@ impl ClientInner {
                         .await?;
                     let lob_len_value = lob_len_result
                         .rows
-                        .get(row_index)
+                        .first()
                         .and_then(|row| row.values().first())
                         .cloned()
                         .unwrap_or(db2_proto::types::Db2Value::Null);
@@ -969,7 +969,7 @@ impl ClientInner {
                 .await?;
             let chunk = chunk_result
                 .rows
-                .get(row_number.saturating_sub(1))
+                .first()
                 .and_then(|row| row.values().first())
                 .and_then(db2_value_to_string)
                 .unwrap_or_default();
@@ -997,7 +997,7 @@ impl ClientInner {
 
         let value = result
             .rows
-            .get(row_number.saturating_sub(1))
+            .first()
             .and_then(|row| row.values().first())
             .cloned()
             .unwrap_or(db2_proto::types::Db2Value::Null);
@@ -2185,11 +2185,11 @@ fn build_zos_lob_length_query(
     row_number: usize,
 ) -> String {
     let ident = quote_sql_identifier(&column.name);
-    let source_sql = build_zos_single_column_source_sql(parsed, &ident);
+    let source_sql = build_zos_numbered_single_column_source_sql(parsed, &ident);
     format!(
-        "SELECT CAST(LENGTH({ident}) AS VARCHAR(32)) AS {} FROM ({source_sql}) AS DB2NODE_LOB_SRC {}",
+        "SELECT CAST(LENGTH({ident}) AS VARCHAR(32)) AS {} FROM ({source_sql}) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = {}",
         quote_sql_identifier("DB2NODE_LOB_LEN"),
-        zos_row_window_clause(row_number)
+        row_number.max(1)
     )
 }
 
@@ -2199,7 +2199,6 @@ fn build_zos_scalar_value_query(
     row_number: usize,
 ) -> String {
     let ident = quote_sql_identifier(&column.name);
-    let source_sql = build_zos_single_column_source_sql(parsed, &ident);
     let projection = if column.is_rowid() {
         format!("HEX({ident}) AS {ident}")
     } else {
@@ -2209,9 +2208,10 @@ fn build_zos_scalar_value_query(
         )
     };
 
+    let source_sql = build_zos_numbered_single_column_source_sql(parsed, &ident);
     format!(
-        "SELECT {projection} FROM ({source_sql}) AS DB2NODE_LOB_SRC {}",
-        zos_row_window_clause(row_number)
+        "SELECT {projection} FROM ({source_sql}) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = {}",
+        row_number.max(1)
     )
 }
 
@@ -2228,27 +2228,24 @@ fn build_zos_lob_chunk_query(
     } else {
         format!("VARCHAR({len})")
     };
-    let source_sql = build_zos_single_column_source_sql(parsed, &ident);
+    let source_sql = build_zos_numbered_single_column_source_sql(parsed, &ident);
     format!(
-        "SELECT CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS \"DB2NODE_LOB_CHUNK\" FROM ({source_sql}) AS DB2NODE_LOB_SRC {}",
-        zos_row_window_clause(row_number)
+        "SELECT CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS \"DB2NODE_LOB_CHUNK\" FROM ({source_sql}) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = {}",
+        row_number.max(1)
     )
 }
 
-fn build_zos_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) -> String {
+fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) -> String {
     if parsed.suffix.trim().is_empty() {
-        format!("SELECT {ident} FROM {}", parsed.table_ref)
+        format!(
+            "SELECT {ident}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {}",
+            parsed.table_ref
+        )
     } else {
-        format!("SELECT {ident} FROM {} {}", parsed.table_ref, parsed.suffix)
-    }
-}
-
-fn zos_row_window_clause(row_number: usize) -> String {
-    let row_number = row_number.max(1);
-    if row_number == 1 {
-        "FETCH FIRST 1 ROW ONLY".to_string()
-    } else {
-        format!("FETCH FIRST {row_number} ROWS ONLY")
+        format!(
+            "SELECT {ident}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {} {}",
+            parsed.table_ref, parsed.suffix
+        )
     }
 }
 
@@ -4624,15 +4621,15 @@ mod tests {
         );
         assert_eq!(
             build_zos_lob_length_query(&parsed, &clob_column, 1),
-            "SELECT CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN\" FROM (SELECT \"INSP_RPT_DETL_DOC\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC FETCH FIRST 1 ROW ONLY"
+            "SELECT CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN\" FROM (SELECT \"INSP_RPT_DETL_DOC\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &decimal_column, 2),
-            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC FETCH FIRST 2 ROWS ONLY"
+            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 2"
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &rowid_column, 1),
-            "SELECT HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\" FROM (SELECT \"DB2_GENERATED_ROWID_FOR_LOBS\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC FETCH FIRST 1 ROW ONLY"
+            "SELECT HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\" FROM (SELECT \"DB2_GENERATED_ROWID_FOR_LOBS\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
         );
     }
 
@@ -4651,7 +4648,8 @@ mod tests {
         let sql = build_zos_lob_chunk_query(&parsed, &column, 2, 16001, 16000);
 
         assert!(sql.contains("CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 16001, 16000) AS VARCHAR(16000))"));
-        assert!(sql.contains("FETCH FIRST 2 ROWS ONLY"));
+        assert!(sql.contains("ROW_NUMBER() OVER() AS \"DB2NODE_RN\""));
+        assert!(sql.contains("WHERE \"DB2NODE_RN\" = 2"));
         assert!(!sql.contains("OFFSET"));
     }
 
