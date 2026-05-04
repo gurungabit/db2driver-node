@@ -2087,13 +2087,16 @@ fn build_zos_lob_base_query_from_columns(
             let ident = quote_sql_identifier(&column.name);
             if column.is_lob() {
                 format!(
-                    "LENGTH({ident}) AS {}",
+                    "CAST(LENGTH({ident}) AS VARCHAR(32)) AS {}",
                     quote_sql_identifier(&lob_len_alias(index))
                 )
             } else if column.is_rowid() {
                 format!("HEX({ident}) AS {ident}")
             } else {
-                ident
+                format!(
+                    "CAST({ident} AS VARCHAR({})) AS {ident}",
+                    zos_base_scalar_cast_len(column)
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -2149,6 +2152,25 @@ fn lob_len_alias(index: usize) -> String {
     format!("DB2NODE_LOB_LEN_{}", index + 1)
 }
 
+fn zos_base_scalar_cast_len(column: &CatalogColumn) -> usize {
+    let coltype = column.normalized_coltype();
+    if coltype.contains("TIMESTAMP") {
+        64
+    } else if coltype.contains("DATE") || coltype.contains("TIME") {
+        32
+    } else if coltype.contains("INT")
+        || coltype.contains("DEC")
+        || coltype.contains("NUM")
+        || coltype.contains("REAL")
+        || coltype.contains("FLOAT")
+        || coltype.contains("DOUBLE")
+    {
+        128
+    } else {
+        4096
+    }
+}
+
 fn zos_lob_output_columns(
     catalog_columns: &[CatalogColumn],
     base_columns: &[ColumnInfo],
@@ -2181,6 +2203,11 @@ fn db2_value_to_usize(value: &db2_proto::types::Db2Value) -> Result<Option<usize
         db2_proto::types::Db2Value::SmallInt(v) => Ok((*v >= 0).then_some(*v as usize)),
         db2_proto::types::Db2Value::Integer(v) => Ok((*v >= 0).then_some(*v as usize)),
         db2_proto::types::Db2Value::BigInt(v) => Ok((*v >= 0).then_some(*v as usize)),
+        db2_proto::types::Db2Value::Char(v) | db2_proto::types::Db2Value::VarChar(v) => v
+            .trim()
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| Error::Protocol(format!("invalid z/OS LOB length value: {v}"))),
         db2_proto::types::Db2Value::Decimal(v) => v
             .trim()
             .parse::<usize>()
@@ -4231,7 +4258,9 @@ mod tests {
         .unwrap();
 
         assert!(rewritten.contains("\"INSP_RPT_ID\""));
-        assert!(rewritten.contains("LENGTH(\"INSP_RPT_DETL_DOC\") AS \"DB2NODE_LOB_LEN_2\""));
+        assert!(rewritten.contains(
+            "CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN_2\""
+        ));
         assert!(rewritten
             .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
@@ -4273,7 +4302,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(rewritten.contains("LENGTH(\"INSP_RPT_DETL_DOC\") AS \"DB2NODE_LOB_LEN_1\""));
+        assert!(rewritten.contains(
+            "CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN_1\""
+        ));
         assert!(rewritten
             .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(!rewritten.contains("\"INSP_RPT_ID\""));
