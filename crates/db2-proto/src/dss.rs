@@ -31,13 +31,25 @@ const DSS_CONTINUATION_HEADER_LEN: usize = 2;
 const DSS_CONTINUATION_PAYLOAD_LEN: usize = DSS_MAX_SEGMENT_LEN - DSS_CONTINUATION_HEADER_LEN;
 
 fn decode_dss_length(raw_length: u16) -> u16 {
-    // LUW returns 0xFFFF for max-sized Object DSS segments carrying large QRYDTA blocks.
-    // The next DSS header starts 2 bytes earlier than a literal 65535-byte consume,
-    // so treat this as a 65533-byte segment.
+    // DRDA uses 0xFFFF as the marker for a max-sized continued DSS segment.
+    // The physical segment is 32,767 bytes; follow-on continuation chunks are
+    // length-prefixed with a two-byte LLCP marker rather than a full DSS header.
     if raw_length == 0xFFFF {
-        0xFFFD
+        DSS_MAX_SEGMENT_LEN as u16
     } else {
         raw_length
+    }
+}
+
+fn is_full_continuation_len(raw_length: u16) -> bool {
+    matches!(raw_length, 0xFFFF | 0x7FFF)
+}
+
+fn decode_continuation_len(raw_length: u16) -> usize {
+    if is_full_continuation_len(raw_length) {
+        DSS_MAX_SEGMENT_LEN
+    } else {
+        raw_length as usize
     }
 }
 
@@ -350,31 +362,54 @@ impl DssReader {
         if self.remaining() < DSS_HEADER_LEN {
             return false;
         }
-        let raw_length =
-            u16::from_be_bytes([self.buffer[self.position], self.buffer[self.position + 1]]);
-        let len = decode_dss_length(raw_length) as usize;
-        self.remaining() >= len
+        self.complete_frame_len().is_some()
     }
 
     /// Parse the next DSS frame, handling continuation segments.
     /// Returns None if not enough data is available.
     pub fn next_frame(&mut self) -> Result<Option<DssFrame>> {
-        if !self.has_complete_frame() {
+        let Some(complete_len) = self.complete_frame_len() else {
             return Ok(None);
-        }
+        };
 
+        let raw_length =
+            u16::from_be_bytes([self.buffer[self.position], self.buffer[self.position + 1]]);
         let header = DssHeader::parse(&self.buffer[self.position..])?;
-        let seg_len = header.length as usize;
-
-        if self.remaining() < seg_len {
-            return Ok(None);
-        }
+        let seg_len = if raw_length == 0xFFFF {
+            DSS_MAX_SEGMENT_LEN
+        } else {
+            header.length as usize
+        };
 
         let payload_start = self.position + DSS_HEADER_LEN;
         let payload_end = self.position + seg_len;
         let mut payload = self.buffer[payload_start..payload_end].to_vec();
         let first_header = header.clone();
         self.position += seg_len;
+
+        if raw_length == 0xFFFF {
+            while self.position < complete_len {
+                let continuation_raw = u16::from_be_bytes([
+                    self.buffer[self.position],
+                    self.buffer[self.position + 1],
+                ]);
+                let continuation_len = decode_continuation_len(continuation_raw);
+                let continuation_payload_start = self.position + DSS_CONTINUATION_HEADER_LEN;
+                let continuation_payload_end = self.position + continuation_len;
+                payload.extend_from_slice(
+                    &self.buffer[continuation_payload_start..continuation_payload_end],
+                );
+                self.position += continuation_len;
+                if !is_full_continuation_len(continuation_raw) {
+                    break;
+                }
+            }
+
+            return Ok(Some(DssFrame {
+                header: first_header,
+                payload,
+            }));
+        }
 
         // DSS continuation: only merge segments that are TRUE continuations
         // (same_correlation + continuation of a large DDM > 32KB).
@@ -448,6 +483,43 @@ impl DssReader {
             header: first_header,
             payload,
         }))
+    }
+
+    fn complete_frame_len(&self) -> Option<usize> {
+        if self.remaining() < DSS_HEADER_LEN {
+            return None;
+        }
+
+        let raw_length =
+            u16::from_be_bytes([self.buffer[self.position], self.buffer[self.position + 1]]);
+        if raw_length != 0xFFFF {
+            let len = decode_dss_length(raw_length) as usize;
+            return (self.remaining() >= len).then_some(self.position + len);
+        }
+
+        if self.remaining() < DSS_MAX_SEGMENT_LEN {
+            return None;
+        }
+
+        let mut position = self.position + DSS_MAX_SEGMENT_LEN;
+        loop {
+            if self.buffer.len().saturating_sub(position) < DSS_CONTINUATION_HEADER_LEN {
+                return None;
+            }
+            let continuation_raw =
+                u16::from_be_bytes([self.buffer[position], self.buffer[position + 1]]);
+            let continuation_len = decode_continuation_len(continuation_raw);
+            if continuation_len < DSS_CONTINUATION_HEADER_LEN {
+                return None;
+            }
+            if self.buffer.len().saturating_sub(position) < continuation_len {
+                return None;
+            }
+            position += continuation_len;
+            if !is_full_continuation_len(continuation_raw) {
+                return Some(position);
+            }
+        }
     }
 
     /// Parse all available frames.
@@ -547,5 +619,20 @@ mod tests {
             data.len(),
             DSS_HEADER_LEN + payload.len() + (2 * DSS_CONTINUATION_HEADER_LEN)
         );
+    }
+
+    #[test]
+    fn test_reader_large_payload_reassembles_continuations() {
+        let payload = (0..70_000).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let mut writer = DssWriter::new(7);
+        writer.write_object(&payload, false);
+        let data = writer.finish();
+
+        let mut reader = DssReader::new(data);
+        let frame = reader.next_frame().unwrap().unwrap();
+
+        assert_eq!(frame.header.dss_type, DssType::Object);
+        assert_eq!(frame.payload, payload);
+        assert!(reader.next_frame().unwrap().is_none());
     }
 }
