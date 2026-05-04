@@ -676,9 +676,11 @@ impl ClientInner {
         };
         ensure_sqlstt_sql_len(&base_sql)?;
 
-        let parsed = parse_simple_select_star(sql, current_schema)
-            .ok_or_else(|| Error::Protocol("failed to parse simple SELECT-star query".into()))?;
-        let catalog_columns = catalog_columns_from_query_result(metadata);
+        let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)
+            .ok_or_else(|| Error::Protocol("failed to parse simple z/OS LOB query".into()))?;
+        let catalog_columns =
+            selected_catalog_columns(&parsed, &catalog_columns_from_query_result(metadata))
+                .ok_or_else(|| Error::Protocol("failed to select z/OS catalog columns".into()))?;
         let base_result = Box::pin(self.execute_query(&base_sql, &[])).await?;
 
         let output_columns = zos_lob_output_columns(
@@ -1763,6 +1765,7 @@ struct SimpleSelectStar {
     suffix: String,
     schema: String,
     table: String,
+    selected_columns: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1777,11 +1780,11 @@ impl CatalogColumn {
     }
 
     fn is_clob(&self) -> bool {
-        self.normalized_coltype() == "CLOB"
+        self.normalized_coltype().starts_with("CLOB")
     }
 
     fn is_dbclob(&self) -> bool {
-        self.normalized_coltype() == "DBCLOB"
+        self.normalized_coltype().starts_with("DBCLOB")
     }
 
     fn is_lob(&self) -> bool {
@@ -1819,7 +1822,7 @@ pub(crate) fn build_sqlstt_for_server(sql: &str, use_zos_format: bool) -> Vec<u8
 }
 
 fn build_zos_select_star_metadata_query(sql: &str, current_schema: Option<&str>) -> Option<String> {
-    let parsed = parse_simple_select_star(sql, current_schema)?;
+    let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)?;
     Some(format!(
         "SELECT NAME, COLTYPE FROM SYSIBM.SYSCOLUMNS WHERE TBCREATOR = '{}' AND TBNAME = '{}' ORDER BY COLNO",
         escape_sql_string_literal(&parsed.schema.to_ascii_uppercase()),
@@ -1832,8 +1835,8 @@ fn build_zos_select_star_lob_base_query(
     current_schema: Option<&str>,
     metadata: &QueryResult,
 ) -> Option<String> {
-    let parsed = parse_simple_select_star(sql, current_schema)?;
-    let columns = catalog_columns_from_query_result(metadata);
+    let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)?;
+    let columns = selected_catalog_columns(&parsed, &catalog_columns_from_query_result(metadata))?;
     if columns.is_empty() || !columns.iter().any(CatalogColumn::is_lob) {
         return None;
     }
@@ -1987,15 +1990,42 @@ fn catalog_columns_from_query_result(metadata: &QueryResult) -> Vec<CatalogColum
         .collect()
 }
 
+fn selected_catalog_columns(
+    parsed: &SimpleSelectStar,
+    catalog_columns: &[CatalogColumn],
+) -> Option<Vec<CatalogColumn>> {
+    match parsed.selected_columns.as_ref() {
+        None => Some(catalog_columns.to_vec()),
+        Some(selected_names) => {
+            let mut selected_columns = Vec::with_capacity(selected_names.len());
+            for selected_name in selected_names {
+                let column = catalog_columns
+                    .iter()
+                    .find(|column| column.name.eq_ignore_ascii_case(selected_name))?;
+                selected_columns.push(column.clone());
+            }
+            Some(selected_columns)
+        }
+    }
+}
+
+#[cfg(test)]
 fn parse_simple_select_star(sql: &str, current_schema: Option<&str>) -> Option<SimpleSelectStar> {
+    let parsed = parse_simple_select_for_zos_lobs(sql, current_schema)?;
+    parsed.selected_columns.is_none().then_some(parsed)
+}
+
+fn parse_simple_select_for_zos_lobs(
+    sql: &str,
+    current_schema: Option<&str>,
+) -> Option<SimpleSelectStar> {
     let trimmed = sql.trim().trim_end_matches(';').trim();
     let mut offset = skip_ascii_whitespace(trimmed, 0);
     offset = consume_keyword(trimmed, offset, "SELECT")?;
     offset = skip_ascii_whitespace(trimmed, offset);
-    if trimmed.as_bytes().get(offset).copied()? != b'*' {
-        return None;
-    }
-    offset += 1;
+    let projection_start = offset;
+    offset = find_from_keyword(trimmed, projection_start)?;
+    let projection = trimmed[projection_start..offset].trim();
     offset = skip_ascii_whitespace(trimmed, offset);
     offset = consume_keyword(trimmed, offset, "FROM")?;
     offset = skip_ascii_whitespace(trimmed, offset);
@@ -2024,7 +2054,157 @@ fn parse_simple_select_star(sql: &str, current_schema: Option<&str>) -> Option<S
         suffix,
         schema,
         table,
+        selected_columns: parse_simple_projection(projection)?,
     })
+}
+
+fn find_from_keyword(input: &str, mut offset: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'"' => {
+                offset += 1;
+                while offset < bytes.len() {
+                    if bytes[offset] == b'"' {
+                        offset += 1;
+                        if bytes.get(offset) == Some(&b'"') {
+                            offset += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    offset += 1;
+                }
+            }
+            byte if byte.eq_ignore_ascii_case(&b'f') => {
+                if consume_keyword(input, offset, "FROM").is_some() {
+                    return Some(offset);
+                }
+                offset += 1;
+            }
+            _ => offset += 1,
+        }
+    }
+    None
+}
+
+fn parse_simple_projection(projection: &str) -> Option<Option<Vec<String>>> {
+    if projection == "*" {
+        return Some(None);
+    }
+
+    let parts = split_top_level_commas(projection)?;
+    let mut columns = Vec::with_capacity(parts.len());
+    for part in parts {
+        let identifier = strip_optional_identifier_alias(part.trim())?;
+        let pieces = split_table_ref_parts(identifier)?;
+        let name = match pieces.as_slice() {
+            [column] => column.clone(),
+            [_qualifier, column] => column.clone(),
+            _ => return None,
+        };
+        columns.push(name);
+    }
+
+    (!columns.is_empty()).then_some(Some(columns))
+}
+
+fn split_top_level_commas(input: &str) -> Option<Vec<&str>> {
+    let bytes = input.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'"' => {
+                offset += 1;
+                while offset < bytes.len() {
+                    if bytes[offset] == b'"' {
+                        offset += 1;
+                        if bytes.get(offset) == Some(&b'"') {
+                            offset += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    offset += 1;
+                }
+            }
+            b',' => {
+                parts.push(input[start..offset].trim());
+                start = offset + 1;
+                offset += 1;
+            }
+            b'(' | b')' => return None,
+            _ => offset += 1,
+        }
+    }
+    parts.push(input[start..].trim());
+
+    if parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    Some(parts)
+}
+
+fn strip_optional_identifier_alias(input: &str) -> Option<&str> {
+    let mut offset = consume_identifier_ref(input, 0)?;
+    let ident = input[..offset].trim();
+    offset = skip_ascii_whitespace(input, offset);
+    if offset >= input.len() {
+        return Some(ident);
+    }
+
+    if let Some(after_as) = consume_keyword(input, offset, "AS") {
+        offset = skip_ascii_whitespace(input, after_as);
+        consume_identifier_ref(input, offset)
+            .filter(|end| skip_ascii_whitespace(input, *end) == input.len())?;
+        return Some(ident);
+    }
+
+    consume_identifier_ref(input, offset)
+        .filter(|end| skip_ascii_whitespace(input, *end) == input.len())?;
+    Some(ident)
+}
+
+fn consume_identifier_ref(input: &str, mut offset: usize) -> Option<usize> {
+    offset = consume_identifier_part(input, offset)?;
+    while input.as_bytes().get(offset) == Some(&b'.') {
+        offset = consume_identifier_part(input, offset + 1)?;
+    }
+    Some(offset)
+}
+
+fn consume_identifier_part(input: &str, mut offset: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    match bytes.get(offset).copied()? {
+        b'"' => {
+            offset += 1;
+            while offset < bytes.len() {
+                if bytes[offset] == b'"' {
+                    offset += 1;
+                    if bytes.get(offset) == Some(&b'"') {
+                        offset += 1;
+                        continue;
+                    }
+                    return Some(offset);
+                }
+                offset += 1;
+            }
+            Some(offset)
+        }
+        byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+            offset += 1;
+            while offset < bytes.len()
+                && (bytes[offset].is_ascii_alphanumeric()
+                    || matches!(bytes[offset], b'_' | b'@' | b'#' | b'$'))
+            {
+                offset += 1;
+            }
+            Some(offset)
+        }
+        _ => None,
+    }
 }
 
 fn skip_ascii_whitespace(input: &str, mut offset: usize) -> usize {
@@ -3668,6 +3848,48 @@ mod tests {
         assert!(rewritten
             .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
         assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
+    }
+
+    #[test]
+    fn build_zos_lob_base_query_supports_simple_projection() {
+        let metadata = QueryResult::with_rows(
+            vec![
+                Row::new(
+                    vec!["COL1".to_string(), "COL2".to_string()],
+                    vec![
+                        Db2Value::VarChar("INSP_RPT_ID".to_string()),
+                        Db2Value::Char("DECIMAL ".to_string()),
+                    ],
+                ),
+                Row::new(
+                    vec!["COL1".to_string(), "COL2".to_string()],
+                    vec![
+                        Db2Value::VarChar("INSP_RPT_DETL_DOC".to_string()),
+                        Db2Value::Char("CLOB(1M)".to_string()),
+                    ],
+                ),
+                Row::new(
+                    vec!["COL1".to_string(), "COL2".to_string()],
+                    vec![
+                        Db2Value::VarChar("DB2_GENERATED_ROWID_FOR_LOBS".to_string()),
+                        Db2Value::Char("ROWID   ".to_string()),
+                    ],
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let rewritten = build_zos_select_star_lob_base_query(
+            "SELECT INSP_RPT_DETL_DOC, DB2_GENERATED_ROWID_FOR_LOBS FROM FIREINSP.INSP_RPT FETCH FIRST 1 ROW ONLY",
+            None,
+            &metadata,
+        )
+        .unwrap();
+
+        assert!(rewritten.contains("LENGTH(\"INSP_RPT_DETL_DOC\") AS \"DB2NODE_LOB_LEN_1\""));
+        assert!(rewritten
+            .contains("HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\""));
+        assert!(!rewritten.contains("\"INSP_RPT_ID\""));
     }
 
     #[test]
