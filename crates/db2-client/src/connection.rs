@@ -184,7 +184,7 @@ impl ClientInner {
 
     pub(crate) async fn read_prepare_reply_frames(&mut self) -> Result<Vec<DssFrame>, Error> {
         let mut frames = self.read_reply_frames().await?;
-        let frame_drain_timeout = self.config.frame_drain_timeout;
+        let frame_drain_timeout = self.frame_drain_timeout();
 
         loop {
             let more_frames = match timeout(frame_drain_timeout, self.read_reply_frames()).await {
@@ -884,8 +884,8 @@ impl ClientInner {
                 .filter(|column| column.is_lob())
                 .count(),
             chunk_query_count,
-            zos_clob_chunk_limit(),
-            zos_dbclob_chunk_limit(),
+            ZOS_CLOB_CHUNK_LIMIT,
+            ZOS_DBCLOB_CHUNK_LIMIT,
             zos_lob_batch_reply_target(),
             zos_lob_chunk_window_target()
         ));
@@ -962,8 +962,8 @@ impl ClientInner {
                 .count(),
             chunk_query_count,
             initial_specs.len(),
-            zos_clob_chunk_limit(),
-            zos_dbclob_chunk_limit(),
+            ZOS_CLOB_CHUNK_LIMIT,
+            ZOS_DBCLOB_CHUNK_LIMIT,
             zos_lob_batch_reply_target(),
             zos_lob_chunk_window_target()
         ));
@@ -2194,6 +2194,7 @@ const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 #[cfg(test)]
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
 const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
+const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
 const ZOS_LOB_BATCH_REPLY_TARGET: usize = 4_000_000;
 const ZOS_LOB_CHUNK_WINDOW_TARGET: usize = 160_000;
 const ZOS_LOB_FRAME_DRAIN_TIMEOUT_MS: usize = 250;
@@ -2322,7 +2323,7 @@ fn build_zos_lob_base_query_from_columns(
         })
         .collect::<Vec<_>>();
 
-    let suffix = zos_lob_internal_query_suffix(parsed);
+    let suffix = parsed.suffix.trim();
     if suffix.is_empty() {
         Some(format!(
             "SELECT {} FROM {}",
@@ -2341,7 +2342,7 @@ fn build_zos_lob_base_query_from_columns(
 
 #[cfg(test)]
 fn build_zos_lob_row_probe_query(parsed: &SimpleSelectStar) -> String {
-    let suffix = zos_lob_internal_query_suffix(parsed);
+    let suffix = parsed.suffix.trim();
     if suffix.is_empty() {
         format!(
             "SELECT 1 AS \"DB2NODE_ROW_EXISTS\" FROM {}",
@@ -2514,7 +2515,7 @@ fn build_zos_lob_initial_combined_grid_query(
         .into_iter()
         .chain(chunk_projection)
         .collect::<Vec<_>>();
-    let suffix = zos_lob_internal_query_suffix(parsed);
+    let suffix = parsed.suffix.trim();
     if suffix.is_empty() {
         format!(
             "SELECT ROW_NUMBER() OVER() AS \"DB2NODE_RN\", {} FROM {}",
@@ -2629,23 +2630,10 @@ fn zos_lob_initial_chunk_specs(columns: &[CatalogColumn]) -> Vec<LobChunkSpec> {
 
 fn zos_lob_chunk_limit(column: &CatalogColumn) -> usize {
     if column.is_dbclob() {
-        zos_dbclob_chunk_limit()
+        ZOS_DBCLOB_CHUNK_LIMIT
     } else {
-        zos_clob_chunk_limit()
+        ZOS_CLOB_CHUNK_LIMIT
     }
-}
-
-fn zos_clob_chunk_limit() -> usize {
-    env_usize(
-        "DB2_ZOS_CLOB_CHUNK_CHARS",
-        ZOS_CLOB_CHUNK_LIMIT,
-        8_000,
-        32_000,
-    )
-}
-
-fn zos_dbclob_chunk_limit() -> usize {
-    (zos_clob_chunk_limit() / 2).max(4_000)
 }
 
 fn zos_lob_batch_reply_target() -> usize {
@@ -2941,8 +2929,7 @@ fn trim_zos_lob_chunk_to_remaining(chunk: &str, remaining_chars: usize) -> &str 
 
 #[cfg(test)]
 fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident: &str) -> String {
-    let suffix = zos_lob_internal_query_suffix(parsed);
-    if suffix.is_empty() {
+    if parsed.suffix.trim().is_empty() {
         format!(
             "SELECT {ident}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {}",
             parsed.table_ref
@@ -2950,7 +2937,7 @@ fn build_zos_numbered_single_column_source_sql(parsed: &SimpleSelectStar, ident:
     } else {
         format!(
             "SELECT {ident}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {} {}",
-            parsed.table_ref, suffix
+            parsed.table_ref, parsed.suffix
         )
     }
 }
@@ -2964,8 +2951,7 @@ fn build_zos_numbered_multi_column_source_sql(
     } else {
         idents.join(", ")
     };
-    let suffix = zos_lob_internal_query_suffix(parsed);
-    if suffix.is_empty() {
+    if parsed.suffix.trim().is_empty() {
         format!(
             "SELECT {projection}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {}",
             parsed.table_ref
@@ -2973,20 +2959,9 @@ fn build_zos_numbered_multi_column_source_sql(
     } else {
         format!(
             "SELECT {projection}, ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM {} {}",
-            parsed.table_ref, suffix
+            parsed.table_ref, parsed.suffix
         )
     }
-}
-
-fn zos_lob_internal_query_suffix(parsed: &SimpleSelectStar) -> String {
-    let suffix = parsed.suffix.trim();
-    let Some(row_limit) = parse_fetch_first_row_limit(suffix) else {
-        return suffix.to_string();
-    };
-    if suffix.to_ascii_uppercase().contains("OPTIMIZE FOR") {
-        return suffix.to_string();
-    }
-    format!("{suffix} OPTIMIZE FOR {row_limit} ROWS")
 }
 
 fn lob_len_alias(index: usize) -> String {
@@ -5242,7 +5217,7 @@ mod tests {
             "CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN_2\""
         ));
         assert!(!rewritten.contains("DB2_GENERATED_ROWID_FOR_LOBS"));
-        assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY OPTIMIZE FOR 3 ROWS"));
+        assert!(rewritten.ends_with("FETCH FIRST 3 ROWS ONLY"));
     }
 
     #[test]
@@ -5409,19 +5384,19 @@ mod tests {
 
         assert_eq!(
             build_zos_lob_row_probe_query(&parsed),
-            "SELECT 1 AS \"DB2NODE_ROW_EXISTS\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY OPTIMIZE FOR 3 ROWS"
+            "SELECT 1 AS \"DB2NODE_ROW_EXISTS\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY"
         );
         assert_eq!(
             build_zos_lob_length_query(&parsed, &clob_column, 1),
-            "SELECT CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN\" FROM (SELECT \"INSP_RPT_DETL_DOC\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY OPTIMIZE FOR 3 ROWS) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
+            "SELECT CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN\" FROM (SELECT \"INSP_RPT_DETL_DOC\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &decimal_column, 2),
-            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY OPTIMIZE FOR 3 ROWS) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 2"
+            "SELECT CAST(\"INSP_RPT_ID\" AS VARCHAR(128)) AS \"INSP_RPT_ID\" FROM (SELECT \"INSP_RPT_ID\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 2"
         );
         assert_eq!(
             build_zos_scalar_value_query(&parsed, &rowid_column, 1),
-            "SELECT HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\" FROM (SELECT \"DB2_GENERATED_ROWID_FOR_LOBS\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY OPTIMIZE FOR 3 ROWS) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
+            "SELECT HEX(\"DB2_GENERATED_ROWID_FOR_LOBS\") AS \"DB2_GENERATED_ROWID_FOR_LOBS\" FROM (SELECT \"DB2_GENERATED_ROWID_FOR_LOBS\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\" FROM FIREINSP.INSP_RPT FETCH FIRST 3 ROWS ONLY) AS DB2NODE_LOB_SRC WHERE \"DB2NODE_RN\" = 1"
         );
     }
 
