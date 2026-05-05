@@ -884,8 +884,8 @@ impl ClientInner {
                 .filter(|column| column.is_lob())
                 .count(),
             chunk_query_count,
-            ZOS_CLOB_CHUNK_LIMIT,
-            ZOS_DBCLOB_CHUNK_LIMIT,
+            zos_clob_chunk_limit(),
+            zos_dbclob_chunk_limit(),
             zos_lob_batch_reply_target(),
             zos_lob_chunk_window_target()
         ));
@@ -962,8 +962,8 @@ impl ClientInner {
                 .count(),
             chunk_query_count,
             initial_specs.len(),
-            ZOS_CLOB_CHUNK_LIMIT,
-            ZOS_DBCLOB_CHUNK_LIMIT,
+            zos_clob_chunk_limit(),
+            zos_dbclob_chunk_limit(),
             zos_lob_batch_reply_target(),
             zos_lob_chunk_window_target()
         ));
@@ -2193,8 +2193,7 @@ const SQLSTT_SQL_TEXT_LEN_LIMIT: usize = u16::MAX as usize;
 const ZOS_CLOB_INLINE_LIMIT: usize = 32704;
 #[cfg(test)]
 const ZOS_DBCLOB_INLINE_LIMIT: usize = ZOS_CLOB_INLINE_LIMIT / 2;
-const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
-const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
+const ZOS_CLOB_CHUNK_LIMIT: usize = 24_000;
 const ZOS_LOB_BATCH_REPLY_TARGET: usize = 4_000_000;
 const ZOS_LOB_CHUNK_WINDOW_TARGET: usize = 160_000;
 const ZOS_LOB_FRAME_DRAIN_TIMEOUT_MS: usize = 250;
@@ -2630,10 +2629,23 @@ fn zos_lob_initial_chunk_specs(columns: &[CatalogColumn]) -> Vec<LobChunkSpec> {
 
 fn zos_lob_chunk_limit(column: &CatalogColumn) -> usize {
     if column.is_dbclob() {
-        ZOS_DBCLOB_CHUNK_LIMIT
+        zos_dbclob_chunk_limit()
     } else {
-        ZOS_CLOB_CHUNK_LIMIT
+        zos_clob_chunk_limit()
     }
+}
+
+fn zos_clob_chunk_limit() -> usize {
+    env_usize(
+        "DB2_ZOS_CLOB_CHUNK_CHARS",
+        ZOS_CLOB_CHUNK_LIMIT,
+        8_000,
+        32_000,
+    )
+}
+
+fn zos_dbclob_chunk_limit() -> usize {
+    (zos_clob_chunk_limit() / 2).max(4_000)
 }
 
 fn zos_lob_batch_reply_target() -> usize {
