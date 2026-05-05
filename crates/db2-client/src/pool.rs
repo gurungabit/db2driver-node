@@ -23,6 +23,8 @@ pub struct PoolConfig {
     pub idle_timeout: Duration,
     /// Maximum lifetime of a connection before it is recycled.
     pub max_lifetime: Duration,
+    /// How long an idle connection can be reused without a round-trip health check.
+    pub health_check_interval: Duration,
 }
 
 impl PoolConfig {
@@ -34,6 +36,7 @@ impl PoolConfig {
             max_connections: 10,
             idle_timeout: Duration::from_secs(600),
             max_lifetime: Duration::from_secs(3600),
+            health_check_interval: Duration::from_secs(30),
         }
     }
 
@@ -58,6 +61,14 @@ impl PoolConfig {
     /// Set the max lifetime.
     pub fn with_max_lifetime(mut self, lifetime: Duration) -> Self {
         self.max_lifetime = lifetime;
+        self
+    }
+
+    /// Set the minimum idle time before a pooled connection is health checked.
+    ///
+    /// A zero duration preserves the old behavior of checking every checkout.
+    pub fn with_health_check_interval(mut self, interval: Duration) -> Self {
+        self.health_check_interval = interval;
         self
     }
 }
@@ -169,6 +180,36 @@ impl Pool {
         self.return_connection(conn).await;
     }
 
+    /// Open idle connections up to the configured minimum.
+    ///
+    /// For pools created with `new_sync`, this removes first-query connection
+    /// cost without forcing constructors to block on network I/O.
+    pub async fn warmup(&self) -> Result<usize, Error> {
+        if self.config.max_connections == 0 {
+            return Err(Error::Pool("max_connections must be > 0".into()));
+        }
+
+        let target = self
+            .config
+            .min_connections
+            .max(1)
+            .min(self.config.max_connections) as usize;
+        let current = self.total_count().await;
+        let to_create = target.saturating_sub(current);
+
+        for _ in 0..to_create {
+            let client = self.create_connection().await?;
+            let conn = PooledConnection {
+                client,
+                created_at: Instant::now(),
+                last_used: Instant::now(),
+            };
+            self.connections.lock().await.push_back(conn);
+        }
+
+        Ok(to_create)
+    }
+
     /// Close all connections in the pool.
     ///
     /// Waits up to `drain_timeout` for checked-out connections to be returned
@@ -270,7 +311,14 @@ impl Pool {
                 continue;
             }
 
-            if !Self::health_check(&conn.client, self.health_check_timeout()).await {
+            if !conn.client.is_connected().await {
+                trace!("Discarding disconnected pooled connection");
+                continue;
+            }
+
+            if self.should_health_check(&conn)
+                && !Self::health_check(&conn.client, self.health_check_timeout()).await
+            {
                 trace!("Discarding unhealthy pooled connection");
                 let _ = conn.client.close().await;
                 continue;
@@ -361,5 +409,10 @@ impl Pool {
         } else {
             query_timeout.min(DEFAULT_HEALTH_CHECK_TIMEOUT)
         }
+    }
+
+    fn should_health_check(&self, conn: &PooledConnection) -> bool {
+        self.config.health_check_interval.is_zero()
+            || conn.last_used.elapsed() >= self.config.health_check_interval
     }
 }

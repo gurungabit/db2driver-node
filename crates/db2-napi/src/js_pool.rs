@@ -30,6 +30,7 @@ pub struct JsPoolConfig {
     pub max_connections: Option<u32>,
     pub idle_timeout: Option<u32>,
     pub max_lifetime: Option<u32>,
+    pub health_check_interval: Option<u32>,
 }
 
 #[napi]
@@ -64,12 +65,26 @@ impl JsPool {
             config.fetch_size,
         )?;
 
+        let min_connections = config.min_connections.unwrap_or(0);
+        let max_connections = config.max_connections.unwrap_or(10);
+        if max_connections == 0 {
+            return Err(Error::from_reason("maxConnections must be > 0"));
+        }
+        if min_connections > max_connections {
+            return Err(Error::from_reason(
+                "minConnections cannot exceed maxConnections",
+            ));
+        }
+
         let pool_config = db2_client::PoolConfig {
             connection: client_config.clone(),
-            min_connections: config.min_connections.unwrap_or(0),
-            max_connections: config.max_connections.unwrap_or(10),
+            min_connections,
+            max_connections,
             idle_timeout: std::time::Duration::from_secs(config.idle_timeout.unwrap_or(600) as u64),
             max_lifetime: std::time::Duration::from_secs(config.max_lifetime.unwrap_or(3600) as u64),
+            health_check_interval: std::time::Duration::from_secs(
+                config.health_check_interval.unwrap_or(30) as u64,
+            ),
         };
 
         // Pool::new is async in the client crate, but napi constructors are sync.
@@ -80,6 +95,18 @@ impl JsPool {
             inner: Arc::new(pool),
             config: client_config,
         })
+    }
+
+    #[napi]
+    pub async fn connect(&self) -> Result<()> {
+        self.inner.warmup().await.map_err(client_error_to_napi)?;
+        Ok(())
+    }
+
+    #[napi]
+    pub async fn warmup(&self) -> Result<u32> {
+        let created = self.inner.warmup().await.map_err(client_error_to_napi)?;
+        Ok(created as u32)
     }
 
     #[napi]

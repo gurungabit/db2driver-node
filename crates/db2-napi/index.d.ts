@@ -66,6 +66,7 @@ export interface JsPoolConfig {
   maxConnections?: number
   idleTimeout?: number
   maxLifetime?: number
+  healthCheckInterval?: number
 }
 export declare class JsClient {
   constructor(config: JsConnectionConfig)
@@ -78,6 +79,8 @@ export declare class JsClient {
 }
 export declare class JsPool {
   constructor(config: JsPoolConfig)
+  connect(): Promise<void>
+  warmup(): Promise<number>
   query(sql: string, params?: Array<any> | undefined | null): Promise<JsQueryResult>
   acquire(): Promise<JsClient>
   release(client: JsClient): Promise<void>
