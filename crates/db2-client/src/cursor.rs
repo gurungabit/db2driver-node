@@ -173,6 +173,10 @@ impl Cursor {
                         obj.data.len()
                     );
                 }
+                if end_of_query && obj.code_point == codepoints::QRYNOPRM {
+                    trace!("Cursor: ignoring late QRYNOPRM after ENDQRYRM");
+                    continue;
+                }
                 if let Some(err) = crate::connection::protocol_reply_error(&obj, "fetch") {
                     return Err(Error::Protocol(format!(
                         "{}; last_fetch=[{}]",

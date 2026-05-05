@@ -1,4 +1,5 @@
 //! Build ACCRDB (Access RDB) command.
+use crate::codepage::{pad_ebcdic, utf8_to_ebcdic037};
 use crate::codepoints::*;
 use crate::ddm::DdmBuilder;
 
@@ -14,6 +15,19 @@ pub const DEFAULT_TYPDEFNAM: &str = "QTDSQLASC";
 pub const DEFAULT_CCSID_SBC: u16 = 1208; // UTF-8 single-byte
 pub const DEFAULT_CCSID_DBC: u16 = 1200; // UTF-16
 pub const DEFAULT_CCSID_MBC: u16 = 1208; // UTF-8 mixed-byte
+
+fn build_luw_crrtkn() -> Vec<u8> {
+    let mut token = utf8_to_ebcdic037("NF000001");
+    token.push(0x4B); // EBCDIC '.'
+    token.extend_from_slice(&utf8_to_ebcdic037("C0A5"));
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let ts_bytes = ts.to_be_bytes();
+    token.extend_from_slice(&ts_bytes[2..8]);
+    token
+}
 
 fn pad_ascii(name: &str, length: usize) -> Vec<u8> {
     let mut bytes = name.as_bytes().to_vec();
@@ -87,6 +101,29 @@ pub fn build_accrdb_with_optional_type_definition(
         typdefovr_data.extend_from_slice(&ccsid_mbc_bytes);
         ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
     }
+
+    ddm.build()
+}
+
+pub fn build_accrdb_luw(rdbnam: &str) -> Vec<u8> {
+    let mut ddm = DdmBuilder::new(ACCRDB);
+    ddm.add_code_point(RDBNAM, &pad_ebcdic(rdbnam, 18));
+    ddm.add_code_point(RDBACCCL, &SQLAM.to_be_bytes());
+    ddm.add_ebcdic_string(PRDID, "SQL11014");
+    ddm.add_ebcdic_string(TYPDEFNAM, "QTDSQLX86");
+    ddm.add_code_point(CRRTKN, &build_luw_crrtkn());
+
+    let mut typdefovr_data = Vec::new();
+    typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+    typdefovr_data.extend_from_slice(&CCSIDSBC.to_be_bytes());
+    typdefovr_data.extend_from_slice(&DEFAULT_CCSID_SBC.to_be_bytes());
+    typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+    typdefovr_data.extend_from_slice(&CCSIDDBC.to_be_bytes());
+    typdefovr_data.extend_from_slice(&DEFAULT_CCSID_DBC.to_be_bytes());
+    typdefovr_data.extend_from_slice(&6u16.to_be_bytes());
+    typdefovr_data.extend_from_slice(&CCSIDMBC.to_be_bytes());
+    typdefovr_data.extend_from_slice(&DEFAULT_CCSID_MBC.to_be_bytes());
+    ddm.add_code_point(TYPDEFOVR, &typdefovr_data);
 
     ddm.build()
 }

@@ -427,16 +427,34 @@ impl ClientInner {
     async fn establish_session(&mut self) -> Result<(), Error> {
         let mut transport = Transport::connect(&self.config).await?;
 
-        let (server_info, next_corr_id) =
-            match auth::authenticate(&mut transport, &self.config).await {
-                Ok(result) => result,
-                Err(Error::Connection(msg)) if msg.to_lowercase().contains("closed by server") => {
-                    return Err(Error::Connection(
-                        "RDB not accessed or database not found".into(),
-                    ));
-                }
-                Err(err) => return Err(err),
-            };
+        let (server_info, next_corr_id) = match auth::authenticate(
+            &mut transport,
+            &self.config,
+            auth::AccsecRdbnamMode::Trimmed,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) if Self::should_retry_accsec_with_luw_legacy_handshake(&err) => {
+                trace!(
+                    "Retrying authentication with LUW legacy handshake after trimmed RDBNAM was rejected: {}",
+                    err
+                );
+                transport = Transport::connect(&self.config).await?;
+                auth::authenticate(
+                    &mut transport,
+                    &self.config,
+                    auth::AccsecRdbnamMode::LuwLegacy,
+                )
+                .await?
+            }
+            Err(Error::Connection(msg)) if msg.to_lowercase().contains("closed by server") => {
+                return Err(Error::Connection(
+                    "RDB not accessed or database not found".into(),
+                ));
+            }
+            Err(err) => return Err(err),
+        };
 
         self.transport = Some(transport);
         let skip_post_auth_init = is_db2_zos_server(&server_info);
@@ -467,6 +485,17 @@ impl ClientInner {
 
         debug!("Client connected to DB2 server");
         Ok(())
+    }
+
+    fn should_retry_accsec_with_luw_legacy_handshake(err: &Error) -> bool {
+        match err {
+            Error::Connection(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rdb not accessed") || msg.contains("database not found")
+            }
+            Error::Protocol(msg) => msg.contains("Expected ACCSECRD, got 0x2211"),
+            _ => false,
+        }
     }
 
     /// Execute a SET command via EXCSQLSET (code point 0x2014).
@@ -726,6 +755,28 @@ impl ClientInner {
 
             self.execute_with_params(&pkgnamcsn, params, &input_descriptors)
                 .await
+        }
+    }
+
+    async fn execute_query_with_reconnect_retry(
+        &mut self,
+        sql: &str,
+        params: &[&dyn ToSql],
+    ) -> Result<QueryResult, Error> {
+        let mut attempts = 0usize;
+        loop {
+            match self.execute_query(sql, params).await {
+                Ok(result) => return Ok(result),
+                Err(err)
+                    if attempts < 4
+                        && should_retry_query_after_session_error(sql, params, &err) =>
+                {
+                    attempts += 1;
+                    self.reset_session_state(false).await;
+                    self.establish_session().await?;
+                }
+                Err(err) => return Err(err),
+            }
         }
     }
 
@@ -1405,9 +1456,8 @@ impl ClientInner {
         let mut extdta_payloads = Vec::new();
         let mut end_of_query = false;
         let mut diagnostics = frame_diagnostics(frames);
-        let prefer_sqldard_descriptors = self.zos_lob_internal_depth > 0
-            || (self.server_info.as_ref().map_or(false, is_db2_zos_server)
-                && sqldard_descriptors.is_some());
+        let prefer_sqldard_descriptors =
+            self.zos_lob_internal_depth > 0 || sqldard_descriptors.is_some();
         if let Some(descriptors) = sqldard_descriptors.as_ref() {
             diagnostics.push(format!(
                 "initial_descriptors count={} {}",
@@ -1416,7 +1466,7 @@ impl ClientInner {
             ));
         }
         if prefer_sqldard_descriptors {
-            diagnostics.push("descriptor_preference=SQLDARD for internal z/OS LOB query".into());
+            diagnostics.push("descriptor_preference=SQLDARD".into());
         }
 
         process_query_frames(
@@ -1433,13 +1483,17 @@ impl ClientInner {
             &mut diagnostics,
         )?;
 
-        let frame_drain_timeout = self.frame_drain_timeout();
-
         // DB2 LUW can stream additional QRYDTA blocks immediately after OPNQRY.
         // Drain those frames before sending CNTQRY, otherwise the server may reject
         // the fetch request as out-of-sequence while the original reply is still active.
         while !end_of_query {
-            let more_frames = match timeout(frame_drain_timeout, self.read_reply_frames()).await {
+            let drain_timeout = self.query_frame_drain_timeout(
+                column_info,
+                sqldard_descriptors.as_ref(),
+                qrydsc_descriptors.as_ref(),
+                prefer_sqldard_descriptors,
+            );
+            let more_frames = match timeout(drain_timeout, self.read_reply_frames()).await {
                 Ok(Ok(frames)) => frames,
                 Ok(Err(err)) => return Err(err),
                 Err(_) => {
@@ -1578,6 +1632,9 @@ impl ClientInner {
                             &more_extdta_payloads,
                         );
                         extdta_payloads.extend(more_extdta_payloads);
+                        if !rows_need_extdta_payloads(&rows, &cursor.descriptors) {
+                            break;
+                        }
                     }
                     if done {
                         break;
@@ -1682,6 +1739,28 @@ impl ClientInner {
             columns,
             diagnostics,
         ))
+    }
+
+    fn query_frame_drain_timeout(
+        &self,
+        column_info: &[ColumnInfo],
+        sqldard_descriptors: Option<&Vec<db2_proto::fdoca::ColumnDescriptor>>,
+        qrydsc_descriptors: Option<&Vec<db2_proto::fdoca::ColumnDescriptor>>,
+        prefer_sqldard_descriptors: bool,
+    ) -> Duration {
+        let timeout = self.frame_drain_timeout();
+        let has_lobs = preferred_descriptor_vec(
+            sqldard_descriptors,
+            qrydsc_descriptors,
+            prefer_sqldard_descriptors,
+        )
+        .is_some_and(|descriptors| descriptors_need_lob_materialization(column_info, descriptors));
+
+        if has_lobs {
+            timeout.max(zos_lob_frame_drain_timeout())
+        } else {
+            timeout
+        }
     }
 
     /// Process reply frames from an execute (non-query) statement.
@@ -2010,12 +2089,17 @@ impl Client {
         }
         let query_timeout = guard.config.query_timeout;
         if query_timeout.is_zero() {
-            match guard.execute_query(sql, params).await {
+            match guard.execute_query_with_reconnect_retry(sql, params).await {
                 Ok(result) => Ok(result),
                 Err(err) => Err(guard.finalize_operation_error("query", err).await),
             }
         } else {
-            match timeout(query_timeout, guard.execute_query(sql, params)).await {
+            match timeout(
+                query_timeout,
+                guard.execute_query_with_reconnect_retry(sql, params),
+            )
+            .await
+            {
                 Ok(result) => match result {
                     Ok(result) => Ok(result),
                     Err(err) => Err(guard.finalize_operation_error("query", err).await),
@@ -2407,13 +2491,7 @@ fn build_zos_lob_chunk_grid_query(
         .iter()
         .enumerate()
         .map(|(index, (start, len))| {
-            build_zos_lob_chunk_projection(
-                &ident,
-                column,
-                *start,
-                *len,
-                &lob_chunk_alias(index),
-            )
+            build_zos_lob_chunk_projection(&ident, column, *start, *len, &lob_chunk_alias(index))
         })
         .collect::<Vec<_>>();
     let source_sql = build_zos_numbered_single_column_source_sql(parsed, &ident);
@@ -3149,10 +3227,17 @@ fn result_metadata_needs_zos_lob_route(
     columns: &[ColumnInfo],
     descriptors: &[db2_proto::fdoca::ColumnDescriptor],
 ) -> bool {
-    descriptors_need_zos_lob_materialization(columns, descriptors)
+    descriptors_need_lob_materialization(columns, descriptors)
 }
 
 fn descriptors_need_zos_lob_materialization(
+    columns: &[ColumnInfo],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> bool {
+    descriptors_need_lob_materialization(columns, descriptors)
+}
+
+fn descriptors_need_lob_materialization(
     columns: &[ColumnInfo],
     descriptors: &[db2_proto::fdoca::ColumnDescriptor],
 ) -> bool {
@@ -4858,6 +4943,22 @@ fn apply_extdta_payloads_to_rows(
     }
 }
 
+fn rows_need_extdta_payloads(
+    rows: &[Row],
+    descriptors: &[db2_proto::fdoca::ColumnDescriptor],
+) -> bool {
+    rows.iter().any(|row| {
+        row.values()
+            .iter()
+            .enumerate()
+            .any(|(column_index, value)| {
+                descriptors.get(column_index).is_some_and(|descriptor| {
+                    descriptor_uses_extdta(descriptor) && value_needs_extdta(value)
+                })
+            })
+    })
+}
+
 fn is_lob_descriptor(descriptor: &db2_proto::fdoca::ColumnDescriptor) -> bool {
     matches!(
         descriptor.db2_type,
@@ -5137,6 +5238,26 @@ pub(crate) fn sql_is_query(sql: &str) -> bool {
         || trimmed.starts_with("WITH")
         || trimmed.starts_with("VALUES")
         || trimmed.starts_with("CALL")
+}
+
+fn should_retry_query_after_session_error(sql: &str, params: &[&dyn ToSql], err: &Error) -> bool {
+    if !params.is_empty() || !sql_is_retryable_read_query(sql) {
+        return false;
+    }
+
+    match err {
+        Error::Connection(message) | Error::Protocol(message) => {
+            let message = message.to_ascii_lowercase();
+            message.contains("closed by server") || message.contains("qrynoprm")
+        }
+        Error::Io(_) | Error::Tls(_) => true,
+        _ => false,
+    }
+}
+
+fn sql_is_retryable_read_query(sql: &str) -> bool {
+    let trimmed = sql.trim().to_uppercase();
+    trimmed.starts_with("SELECT") || trimmed.starts_with("WITH") || trimmed.starts_with("VALUES")
 }
 
 #[cfg(test)]

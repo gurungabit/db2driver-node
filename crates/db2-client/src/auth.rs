@@ -19,6 +19,12 @@ pub struct ServerInfo {
     pub manager_levels: Vec<(u16, u16)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccsecRdbnamMode {
+    Trimmed,
+    LuwLegacy,
+}
+
 /// Perform the full DRDA authentication handshake.
 ///
 /// The flow consists of two exchanges:
@@ -26,18 +32,32 @@ pub struct ServerInfo {
 /// 2. SECCHK (chained) + ACCRDB -> SECCHKRM + ACCRDBRM
 ///
 /// Returns the server info and the next correlation ID to use.
-pub async fn authenticate(
+pub(crate) async fn authenticate(
     transport: &mut Transport,
     config: &Config,
+    accsec_rdbnam_mode: AccsecRdbnamMode,
 ) -> Result<(ServerInfo, u16), Error> {
     debug!("Starting DRDA authentication handshake");
 
     // Phase 1: EXCSAT + ACCSEC — negotiate the requested security mechanism.
-    let requested_encryption_algorithm = proto_encryption_algorithm(config.encryption_algorithm);
-    let excsat_data = db2_proto::commands::excsat::build_excsat_with_security_manager_level(
-        security_manager_level(config.encryption_algorithm),
-    );
+    let luw_legacy = accsec_rdbnam_mode == AccsecRdbnamMode::LuwLegacy;
+    let requested_encryption_algorithm = if luw_legacy {
+        db2_proto::secmec9::EncryptionAlgorithm::Des
+    } else {
+        proto_encryption_algorithm(config.encryption_algorithm)
+    };
     let requested_secmec = security_mechanism_code(config.security_mechanism);
+    let excsat_security_manager_level = if luw_legacy {
+        7
+    } else {
+        match config.security_mechanism {
+            SecurityMechanism::UserPassword | SecurityMechanism::UserOnly => 7,
+            _ => security_manager_level(config.encryption_algorithm),
+        }
+    };
+    let excsat_data = db2_proto::commands::excsat::build_excsat_with_security_manager_level(
+        excsat_security_manager_level,
+    );
     if matches!(
         config.security_mechanism,
         SecurityMechanism::UserPassword | SecurityMechanism::UserOnly
@@ -63,6 +83,7 @@ pub async fn authenticate(
         &config.database,
         &client_public,
         requested_encryption_algorithm,
+        accsec_rdbnam_mode,
     )?;
 
     let mut writer = DssWriter::new(1);
@@ -141,7 +162,7 @@ pub async fn authenticate(
                 reply.encryption_key_length,
             )
         }
-        codepoints::RDBNACRM | 0x221A => {
+        codepoints::RDBNACRM | 0x221A | 0x2211 => {
             // Some DB2 LUW servers reject an unknown RDB name during ACCSEC
             // instead of waiting until the later ACCRDB phase.
             return Err(Error::Connection(
@@ -188,27 +209,44 @@ pub async fn authenticate(
     // Phase 2: SECCHK + ACCRDB. If the server negotiated a mechanism other
     // than the one we initially requested, send a matching ACCSEC first.
     let renegotiate_security = accepted_secmec != requested_secmec;
-    let secchk_data = build_secchk_for_mechanism(
-        accepted_secmec,
-        server_sectkn.as_deref(),
-        &client_private,
-        config,
-        credential_options,
-        &accsecrd_detail,
-    )?;
-    let type_definition_name = match config.type_definition_name.as_deref() {
-        Some("") => None,
-        Some(value) => Some(value),
-        None => Some(db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM),
+    let is_zos_server = !luw_legacy && server_info_is_zos(&server_info);
+    let secchk_data = if luw_legacy {
+        build_luw_legacy_secchk_for_mechanism(
+            accepted_secmec,
+            server_sectkn.as_deref(),
+            &client_private,
+            config,
+            &accsecrd_detail,
+        )?
+    } else {
+        build_secchk_for_mechanism(
+            accepted_secmec,
+            server_sectkn.as_deref(),
+            &client_private,
+            config,
+            credential_options,
+            &accsecrd_detail,
+        )?
     };
-    let accrdb_data = db2_proto::commands::accrdb::build_accrdb_with_optional_type_definition(
-        &config.database,
-        db2_proto::commands::accrdb::DEFAULT_PRDID,
-        type_definition_name,
-        db2_proto::commands::accrdb::DEFAULT_CCSID_SBC,
-        db2_proto::commands::accrdb::DEFAULT_CCSID_DBC,
-        db2_proto::commands::accrdb::DEFAULT_CCSID_MBC,
-    );
+    let accrdb_data = if luw_legacy {
+        db2_proto::commands::accrdb::build_accrdb_luw(&config.database)
+    } else if is_zos_server {
+        let type_definition_name = match config.type_definition_name.as_deref() {
+            Some("") => None,
+            Some(value) => Some(value),
+            None => Some(db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM),
+        };
+        db2_proto::commands::accrdb::build_accrdb_with_optional_type_definition(
+            &config.database,
+            db2_proto::commands::accrdb::DEFAULT_PRDID,
+            type_definition_name,
+            db2_proto::commands::accrdb::DEFAULT_CCSID_SBC,
+            db2_proto::commands::accrdb::DEFAULT_CCSID_DBC,
+            db2_proto::commands::accrdb::DEFAULT_CCSID_MBC,
+        )
+    } else {
+        db2_proto::commands::accrdb::build_accrdb_luw(&config.database)
+    };
 
     let mut writer = DssWriter::new(1);
     if renegotiate_security {
@@ -217,6 +255,7 @@ pub async fn authenticate(
             &config.database,
             &client_public,
             negotiated_encryption_algorithm,
+            accsec_rdbnam_mode,
         )?;
         writer.write_request(&accsec_data, true); // chained
         writer.set_correlation_id(2);
@@ -333,7 +372,7 @@ pub async fn authenticate(
                     found_accrdbrm = true;
                 }
             }
-            codepoints::RDBNACRM => {
+            codepoints::RDBNACRM | 0x2211 => {
                 return Err(Error::Connection(
                     "RDB not accessed or database not found".into(),
                 ));
@@ -345,7 +384,15 @@ pub async fn authenticate(
                 )));
             }
             codepoints::CMDNSPRM | codepoints::PRMNSPRM | codepoints::VALNSPRM => {
-                let typdef_detail = type_definition_name.unwrap_or("<omitted>");
+                let typdef_detail = if server_info_is_zos(&server_info) {
+                    match config.type_definition_name.as_deref() {
+                        Some("") => "<omitted>",
+                        Some(value) => value,
+                        None => db2_proto::commands::accrdb::DEFAULT_TYPDEFNAM,
+                    }
+                } else {
+                    "QTDSQLX86"
+                };
                 return Err(Error::Protocol(format!(
                     "Server rejected an authentication parameter with {}: {}; accrdb_type_definition_name={}; received {}",
                     code_point_name(obj.code_point),
@@ -442,6 +489,12 @@ fn negotiated_encryption_algorithm(
     }
 }
 
+fn server_info_is_zos(server_info: &ServerInfo) -> bool {
+    let release = server_info.server_release.trim().to_ascii_uppercase();
+    let class = server_info.server_class.trim().to_ascii_uppercase();
+    release.starts_with("DSN") || class.contains("Z/OS") || class.contains("MVS")
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AuthCredentialOptions {
     credential_encoding: db2_proto::commands::secchk::CredentialEncoding,
@@ -455,6 +508,7 @@ fn build_accsec_for_mechanism(
     rdbnam: &str,
     client_public: &[u8],
     encryption_algorithm: db2_proto::secmec9::EncryptionAlgorithm,
+    rdbnam_mode: AccsecRdbnamMode,
 ) -> Result<Vec<u8>, Error> {
     match security_mechanism {
         codepoints::SECMEC_EUSRIDPWD
@@ -463,7 +517,11 @@ fn build_accsec_for_mechanism(
         | codepoints::SECMEC_USRIDONL => {
             let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::ACCSEC);
             ddm.add_u16(codepoints::SECMEC, security_mechanism);
-            ddm.add_code_point(codepoints::RDBNAM, &db2_proto::codepage::pad_rdbnam(rdbnam));
+            let rdbnam = match rdbnam_mode {
+                AccsecRdbnamMode::Trimmed => db2_proto::codepage::pad_rdbnam(rdbnam),
+                AccsecRdbnamMode::LuwLegacy => db2_proto::codepage::pad_ebcdic(rdbnam, 18),
+            };
+            ddm.add_code_point(codepoints::RDBNAM, &rdbnam);
             if matches!(
                 security_mechanism,
                 codepoints::SECMEC_EUSRIDPWD | codepoints::SECMEC_USRENCPWD
@@ -546,6 +604,64 @@ fn build_secchk_for_mechanism(
         }
         other => Err(Error::Auth(format!(
             "Server selected unsupported DRDA security mechanism 0x{other:04X}"
+        ))),
+    }
+}
+
+fn build_luw_legacy_secchk_for_mechanism(
+    security_mechanism: u16,
+    server_sectkn: Option<&[u8]>,
+    client_private: &[u8],
+    config: &Config,
+    accsecrd_detail: &str,
+) -> Result<Vec<u8>, Error> {
+    match security_mechanism {
+        codepoints::SECMEC_EUSRIDPWD => {
+            let server_sectkn = server_sectkn.ok_or_else(|| {
+                Error::Protocol(format!(
+                    "ACCSECRD selected encrypted authentication but did not include SECTKN; {accsecrd_detail}"
+                ))
+            })?;
+            db2_proto::commands::secchk::build_secchk_eusridpwd(
+                &config.database,
+                &config.user,
+                &config.password,
+                server_sectkn,
+                client_private,
+            )
+            .map_err(Error::from)
+        }
+        codepoints::SECMEC_USRENCPWD => {
+            let server_sectkn = server_sectkn.ok_or_else(|| {
+                Error::Protocol(format!(
+                    "ACCSECRD selected encrypted password authentication but did not include SECTKN; {accsecrd_detail}"
+                ))
+            })?;
+            db2_proto::commands::secchk::build_secchk_usencpwd(
+                &config.database,
+                &config.user,
+                &config.password,
+                server_sectkn,
+                client_private,
+            )
+            .map_err(Error::from)
+        }
+        codepoints::SECMEC_USRIDPWD => Ok(db2_proto::commands::secchk::build_secchk_usridpwd(
+            &config.database,
+            &config.user,
+            &config.password,
+        )),
+        codepoints::SECMEC_USRIDONL => {
+            let mut ddm = db2_proto::ddm::DdmBuilder::new(codepoints::SECCHK);
+            ddm.add_u16(codepoints::SECMEC, codepoints::SECMEC_USRIDONL);
+            ddm.add_code_point(
+                codepoints::USRID,
+                &db2_proto::codepage::utf8_to_ebcdic037(&config.user),
+            );
+            Ok(ddm.build())
+        }
+        other => Err(Error::Auth(format!(
+            "Unsupported DRDA security mechanism 0x{other:04X}"
         ))),
     }
 }
@@ -673,6 +789,7 @@ fn phase2_frames_complete(frames: &[DssFrame], min_success_frames: usize) -> Res
             }
             codepoints::ACCRDBRM => saw_access_reply = true,
             codepoints::RDBNACRM
+            | 0x2211
             | codepoints::PRCCNVRM
             | codepoints::SYNTAXRM
             | codepoints::CMDNSPRM
@@ -856,6 +973,7 @@ mod tests {
             "DSNDB04",
             &public_key,
             db2_proto::secmec9::EncryptionAlgorithm::Des,
+            AccsecRdbnamMode::Trimmed,
         )
         .unwrap();
         let (encrypted_obj, _) = DdmObject::parse(&encrypted).unwrap();
@@ -866,6 +984,7 @@ mod tests {
             "DSNDB04",
             &public_key,
             db2_proto::secmec9::EncryptionAlgorithm::Des,
+            AccsecRdbnamMode::Trimmed,
         )
         .unwrap();
         let (encrypted_password_obj, _) = DdmObject::parse(&encrypted_password).unwrap();
@@ -878,6 +997,7 @@ mod tests {
             "DSNDB04",
             &public_key,
             db2_proto::secmec9::EncryptionAlgorithm::Des,
+            AccsecRdbnamMode::Trimmed,
         )
         .unwrap();
         let (clear_obj, _) = DdmObject::parse(&clear).unwrap();
@@ -892,6 +1012,7 @@ mod tests {
             "DSNDB04",
             &public_key,
             db2_proto::secmec9::EncryptionAlgorithm::Aes,
+            AccsecRdbnamMode::Trimmed,
         )
         .unwrap();
         let (obj, _) = DdmObject::parse(&encrypted_password).unwrap();
