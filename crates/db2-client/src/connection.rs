@@ -2407,14 +2407,12 @@ fn build_zos_lob_chunk_grid_query(
         .iter()
         .enumerate()
         .map(|(index, (start, len))| {
-            let cast_type = if column.is_dbclob() {
-                format!("VARGRAPHIC({len})")
-            } else {
-                format!("VARCHAR({len})")
-            };
-            format!(
-                "CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) AS {}",
-                quote_sql_identifier(&lob_chunk_alias(index))
+            build_zos_lob_chunk_projection(
+                &ident,
+                column,
+                *start,
+                *len,
+                &lob_chunk_alias(index),
             )
         })
         .collect::<Vec<_>>();
@@ -2439,16 +2437,12 @@ fn build_zos_lob_combined_chunk_grid_query(
         .map(|spec| {
             let column = &columns[spec.column_index];
             let ident = quote_sql_identifier(&column.name);
-            let cast_type = if column.is_dbclob() {
-                format!("VARGRAPHIC({})", spec.len)
-            } else {
-                format!("VARCHAR({})", spec.len)
-            };
-            format!(
-                "CAST(SUBSTR({ident}, {}, {}) AS {cast_type}) AS {}",
+            build_zos_lob_chunk_projection(
+                &ident,
+                column,
                 spec.start,
                 spec.len,
-                quote_sql_identifier(&lob_chunk_column_alias(spec))
+                &lob_chunk_column_alias(spec),
             )
         })
         .collect::<Vec<_>>();
@@ -2498,16 +2492,12 @@ fn build_zos_lob_initial_combined_grid_query(
         .map(|spec| {
             let column = &columns[spec.column_index];
             let ident = quote_sql_identifier(&column.name);
-            let cast_type = if column.is_dbclob() {
-                format!("VARGRAPHIC({})", spec.len)
-            } else {
-                format!("VARCHAR({})", spec.len)
-            };
-            format!(
-                "CAST(SUBSTR({ident}, {}, {}) AS {cast_type}) AS {}",
+            build_zos_lob_chunk_projection(
+                &ident,
+                column,
                 spec.start,
                 spec.len,
-                quote_sql_identifier(&lob_chunk_column_alias(spec))
+                &lob_chunk_column_alias(spec),
             )
         })
         .collect::<Vec<_>>();
@@ -2530,6 +2520,24 @@ fn build_zos_lob_initial_combined_grid_query(
             suffix
         )
     }
+}
+
+fn build_zos_lob_chunk_projection(
+    ident: &str,
+    column: &CatalogColumn,
+    start: usize,
+    len: usize,
+    alias: &str,
+) -> String {
+    let cast_type = if column.is_dbclob() {
+        format!("VARGRAPHIC({len})")
+    } else {
+        format!("VARCHAR({len})")
+    };
+    format!(
+        "CASE WHEN LENGTH({ident}) >= {start} THEN CAST(SUBSTR({ident}, {start}, {len}) AS {cast_type}) ELSE CAST(NULL AS {cast_type}) END AS {}",
+        quote_sql_identifier(alias)
+    )
 }
 
 #[cfg(test)]
@@ -5443,13 +5451,13 @@ mod tests {
 
         assert!(sql.starts_with("SELECT \"DB2NODE_RN\", "));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_CHUNK_1\""
+            "CASE WHEN LENGTH(\"INSP_RPT_DETL_DOC\") >= 1 THEN CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_CHUNK_1\""
         ));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 16001, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_CHUNK_2\""
+            "CASE WHEN LENGTH(\"INSP_RPT_DETL_DOC\") >= 16001 THEN CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 16001, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_CHUNK_2\""
         ));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 32001, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_CHUNK_3\""
+            "CASE WHEN LENGTH(\"INSP_RPT_DETL_DOC\") >= 32001 THEN CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 32001, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_CHUNK_3\""
         ));
         assert!(sql.contains("WHERE \"DB2NODE_RN\" BETWEEN 1 AND 3"));
         assert!(!sql.contains("OFFSET"));
@@ -5495,10 +5503,10 @@ mod tests {
 
         assert!(sql.starts_with("SELECT \"DB2NODE_RN\", "));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_C2_K1\""
+            "CASE WHEN LENGTH(\"INSP_RPT_DETL_DOC\") >= 1 THEN CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_C2_K1\""
         ));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"UNDWR_ACTN_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_C3_K1\""
+            "CASE WHEN LENGTH(\"UNDWR_ACTN_DETL_DOC\") >= 1 THEN CAST(SUBSTR(\"UNDWR_ACTN_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_C3_K1\""
         ));
         assert!(sql.contains(
             "SELECT \"INSP_RPT_DETL_DOC\", \"UNDWR_ACTN_DETL_DOC\", ROW_NUMBER() OVER() AS \"DB2NODE_RN\""
@@ -5539,7 +5547,7 @@ mod tests {
             "CAST(LENGTH(\"INSP_RPT_DETL_DOC\") AS VARCHAR(32)) AS \"DB2NODE_LOB_LEN_2\""
         ));
         assert!(sql.contains(
-            "CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) AS \"DB2NODE_LOB_C2_K1\""
+            "CASE WHEN LENGTH(\"INSP_RPT_DETL_DOC\") >= 1 THEN CAST(SUBSTR(\"INSP_RPT_DETL_DOC\", 1, 16000) AS VARCHAR(16000)) ELSE CAST(NULL AS VARCHAR(16000)) END AS \"DB2NODE_LOB_C2_K1\""
         ));
         assert!(sql.contains("FETCH FIRST 10 ROWS ONLY"));
         assert!(!sql.contains("OFFSET"));
