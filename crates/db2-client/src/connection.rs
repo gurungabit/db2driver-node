@@ -204,7 +204,13 @@ impl ClientInner {
     }
 
     fn frame_drain_timeout(&self) -> Duration {
-        self.config.frame_drain_timeout
+        let timeout = self.config.frame_drain_timeout;
+        if self.zos_lob_internal_depth > 0
+            && self.server_info.as_ref().map_or(false, is_db2_zos_server)
+        {
+            return timeout.max(zos_lob_frame_drain_timeout());
+        }
+        timeout
     }
 
     fn should_auto_reconnect(&self) -> bool {
@@ -2191,6 +2197,7 @@ const ZOS_CLOB_CHUNK_LIMIT: usize = 16_000;
 const ZOS_DBCLOB_CHUNK_LIMIT: usize = ZOS_CLOB_CHUNK_LIMIT / 2;
 const ZOS_LOB_BATCH_REPLY_TARGET: usize = 4_000_000;
 const ZOS_LOB_CHUNK_WINDOW_TARGET: usize = 160_000;
+const ZOS_LOB_FRAME_DRAIN_TIMEOUT_MS: usize = 250;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SimpleSelectStar {
@@ -2645,6 +2652,15 @@ fn zos_lob_chunk_window_target() -> usize {
         8_000,
         512_000,
     )
+}
+
+fn zos_lob_frame_drain_timeout() -> Duration {
+    Duration::from_millis(env_usize(
+        "DB2_ZOS_LOB_FRAME_DRAIN_MS",
+        ZOS_LOB_FRAME_DRAIN_TIMEOUT_MS,
+        25,
+        2_000,
+    ) as u64)
 }
 
 fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
